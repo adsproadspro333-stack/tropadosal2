@@ -23,7 +23,7 @@ export default function HeroBanner() {
     justifyContent: "center",
     alignItems: "center",
     bgcolor: "#F3F4F6",
-    px: 0.5,
+    px: 1.5,
     pt: 0.1,   // ✅ reduz drasticamente o espaço superior
     pb: 1.5,
     gap: 1,
