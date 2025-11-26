@@ -5,11 +5,21 @@ import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 import { cn } from "@/lib/utils"
 
+// 🎨 CORES PRINCIPAIS
+const PRIMARY_RED = "#8B0000"   // vermelho escuro dos combos
+const LIGHT_RED = "#FDE8E8"     // vermelho claro de hover
+const BADGE_GREEN = "#16A34A"   // verde do selo "Mais vendido"
+
+// 🎯 COMBOS
+// 100 → 9,90
+// 200 → 19,90
+// 500 → 49,90
+// 1000 → 99,90
 const COMBOS = [
-  { id: "combo-1000", quantity: 1000, priceCents: 2990 },
-  { id: "combo-2500", quantity: 2500, priceCents: 3990 },
-  { id: "combo-5000", quantity: 5000, priceCents: 4990 },
-  { id: "combo-10000", quantity: 10000, priceCents: 9990 },
+  { id: "combo-100", quantity: 100, priceCents: 990 },
+  { id: "combo-200", quantity: 200, priceCents: 1990 },
+  { id: "combo-500", quantity: 500, priceCents: 4990 },
+  { id: "combo-1000", quantity: 1000, priceCents: 9990 },
 ]
 
 let clickAudio: HTMLAudioElement | null = null
@@ -31,8 +41,9 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo selecionado no momento (começa no +1000)
-  const [selectedComboId, setSelectedComboId] = useState<string | null>("combo-1000")
+  // combo selecionado no momento (começa no +100)
+  const [selectedComboId, setSelectedComboId] =
+    useState<string | null>("combo-100")
   const [highlight, setHighlight] = useState(true)
 
   useEffect(() => {
@@ -51,22 +62,22 @@ export default function NumbersAdder() {
       | "special-5000"
       | "premium-10000" = "default"
 
-    if (combo.quantity === 1000) {
+    if (combo.quantity === 100) {
       message = `+${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "default"
-    } else if (combo.quantity === 2500) {
+    } else if (combo.quantity === 200) {
       message = `🔥 Oferta inteligente! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "smart-2500"
-    } else if (combo.quantity === 5000) {
+    } else if (combo.quantity === 500) {
       message = `🚀 Aceleração total! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "special-5000"
-    } else if (combo.quantity === 10000) {
+    } else if (combo.quantity === 1000) {
       message = `👑 Combo VIP ativado! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
@@ -82,8 +93,8 @@ export default function NumbersAdder() {
     <div className="w-full">
       <div className="grid grid-cols-2 gap-3 sm:gap-4">
         {COMBOS.map((combo) => {
-          const isFeatured = combo.quantity === 1000         // combo “Mais vendido”
-          const isSelected = selectedComboId === combo.id    // combo selecionado
+          const isFeatured = combo.quantity === 100 // “Mais vendido” no +100
+          const isSelected = selectedComboId === combo.id
 
           return (
             <button
@@ -93,20 +104,27 @@ export default function NumbersAdder() {
                 combo.priceCents / 100,
               )}`}
               onClick={() => handleAdd(combo)}
+              style={{
+                ["--primary-red" as any]: PRIMARY_RED,
+                ["--light-red" as any]: LIGHT_RED,
+              }}
               className={cn(
                 "relative w-full select-none cursor-pointer",
                 "rounded-xl border-2 shadow-sm transition-all duration-200 ease-out",
                 "hover:shadow-md hover:scale-[1.02] active:scale-95",
-                "focus:outline-none focus:ring-2 focus:ring-[#93C5FD]",
+                "focus:outline-none focus:ring-2",
                 isSelected
-                  ? "bg-[#1D4ED8] border-[#1D4ED8] text-white hover:bg-[#1E40AF]"
-                  : "bg-white border-[#1D4ED8] text-[#1D4ED8] hover:bg-[#EFF6FF]",
+                  ? "bg-[var(--primary-red)] border-[var(--primary-red)] text-white hover:brightness-90"
+                  : "bg-white border-[var(--primary-red)] text-[var(--primary-red)] hover:bg-[var(--light-red)]",
                 highlight && isFeatured && "motion-safe:animate-soft-pulse",
               )}
             >
-              {/* Badge MAIS VENDIDO sempre no +1000 */}
+              {/* Badge MAIS VENDIDO sempre no primeiro combo */}
               {isFeatured && (
-                <span className="absolute -top-2 left-2 rounded-full bg-[#EF4444] px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm flex items-center gap-1">
+                <span
+                  className="absolute -top-2 left-2 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm flex items-center gap-1"
+                  style={{ backgroundColor: BADGE_GREEN }}
+                >
                   <span className="text-[11px]">🔥</span>
                   Mais vendido
                 </span>
@@ -125,7 +143,7 @@ export default function NumbersAdder() {
                     "mt-2 text-[11px] sm:text-xs underline underline-offset-2",
                     isSelected
                       ? "text-white decoration-white/70"
-                      : "text-[#1D4ED8] decoration-[#93C5FD]",
+                      : "text-[var(--primary-red)] decoration-[var(--primary-red)]/50",
                   )}
                 >
                   Adicionar ao carrinho

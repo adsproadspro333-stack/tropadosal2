@@ -46,7 +46,7 @@ export default function HeroBanner() {
               objectFit: "cover",
               // puxa o foco um pouco mais para cima,
               // mostrando melhor a parte do topo da arte
-              objectPosition: "center 22%",
+              objectPosition: "center 45%",
             }}
           />
         </Box>

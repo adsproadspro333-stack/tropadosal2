@@ -7,11 +7,14 @@ import { formatBRL } from "@/lib/formatCurrency"
 import { useEffect, useState } from "react"
 import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos"
 
+const MIN_QTY = 100
+
 export default function FixedCTA() {
   const router = useRouter()
   const { qty, totalInCents } = useCartStore()
 
-  const disabled = qty < 100
+  // 🔒 Bloqueia se tiver menos que 100 números
+  const disabled = qty < MIN_QTY
   const [pulse, setPulse] = useState(false)
 
   // pulso suave automático a cada 9s se estiver habilitado
@@ -29,7 +32,9 @@ export default function FixedCTA() {
   const handleClick: React.MouseEventHandler<HTMLButtonElement> = (e) => {
     e.preventDefault()
     e.stopPropagation()
+
     if (disabled) return
+
     router.push("/dados")
   }
 
@@ -55,9 +60,22 @@ export default function FixedCTA() {
           gap: 1,
         }}
       >
+        {/* 🔢 Info dinâmica */}
         <Typography fontWeight={600} textAlign="center">
           {qty} números • Total: {formatBRL(totalInCents / 100)}
         </Typography>
+
+        {/* ⚠️ Aviso educativo se abaixo do mínimo */}
+        {disabled && (
+          <Typography
+            textAlign="center"
+            fontSize="12px"
+            fontWeight={500}
+            color="#dc2626"
+          >
+            Selecione no mínimo {MIN_QTY} números para continuar.
+          </Typography>
+        )}
 
         <Button
           fullWidth
@@ -88,7 +106,7 @@ export default function FixedCTA() {
             },
 
             "&:active": {
-              transform: "scale(0.97)",
+              transform: disabled ? "none" : "scale(0.97)",
               boxShadow: "0px 6px 14px rgba(0,0,0,0.2)",
             },
           }}

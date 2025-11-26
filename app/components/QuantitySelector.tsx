@@ -16,7 +16,7 @@ const PRESETS = [
   { label: "+500", q: 500 },
 ]
 
-const UNIT_PRICE_CENTS = 10
+const UNIT_PRICE_CENTS = 100
 
 export default function QuantitySelector() {
   const router = useRouter()
