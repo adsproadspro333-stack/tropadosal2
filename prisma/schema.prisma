@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  cpf       String   @unique
+
+  // 🔹 Campos adicionais para melhorar match quality no Meta e identificação de usuário
+  email     String?  @unique        // email do usuário (hashado no CAPI)
+  phone     String?                  // telefone com DDI, ex: 5599999999999
+  firstName String?                  // primeiro nome
+  lastName  String?                  // sobrenome
+  city      String?                  // cidade (para user_data do Meta)
+  state     String?                  // estado (UF)
+  zip       String?                  // CEP
+  country   String?  @default("BR")  // país (BR por padrão)
+
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Order {
+  id        String   @id @default(uuid())
+  userId    String
+  amount    Float
+  quantity  Int      @default(0)          // 👈 NOVO CAMPO: qtd total de números
+  status    String   @default("pending")  // pending, paid, canceled
+  createdAt DateTime @default(now())
+
+  // 🔹 Campo para integração com Meta CAPI
+  // Usado como event_id para deduplicação entre browser e servidor
+  metaEventId String?                   // event_id usado no Meta (CAPI / Pixel)
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+  tickets      Ticket[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Transaction {
+  id        String   @id @default(uuid())
+  orderId   String
+  value     Float
+  status    String   @default("pending") // pending, paid, failed
+  gatewayId String?                      // ID retornado pelo gateway
+  createdAt DateTime @default(now())
+  order     Order    @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([status])
+}
+
+model Ticket {
+  id        String   @id @default(uuid())
+  orderId   String
+  number    Int
+  createdAt DateTime @default(now())
+  order     Order    @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([number])
+}
