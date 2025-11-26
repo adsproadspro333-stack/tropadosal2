@@ -279,7 +279,7 @@ export default function HomePage() {
             Progresso de vendas
           </Typography>
 
-          <SalesProgress percent={98.1} />
+          <SalesProgress percent={76.3} />
 
           <Typography
             variant="caption"

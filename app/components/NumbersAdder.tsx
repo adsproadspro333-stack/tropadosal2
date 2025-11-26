@@ -96,6 +96,17 @@ export default function NumbersAdder() {
           const isFeatured = combo.quantity === 100 // “Mais vendido” no +100
           const isSelected = selectedComboId === combo.id
 
+          // ✨ Glow + micro animação só quando o combo está selecionado
+          const dynamicStyle: React.CSSProperties = {
+            ["--primary-red" as any]: PRIMARY_RED,
+            ["--light-red" as any]: LIGHT_RED,
+            boxShadow: isSelected
+              ? "0 0 0 1px rgba(139,0,0,0.7), 0 10px 22px rgba(139,0,0,0.45)"
+              : "0 2px 6px rgba(15,23,42,0.12)",
+            transform: isSelected ? "translateY(-1px) scale(1.02)" : "translateY(0) scale(1)",
+            transition: "transform 0.18s ease, box-shadow 0.18s ease",
+          }
+
           return (
             <button
               key={combo.id}
@@ -104,15 +115,12 @@ export default function NumbersAdder() {
                 combo.priceCents / 100,
               )}`}
               onClick={() => handleAdd(combo)}
-              style={{
-                ["--primary-red" as any]: PRIMARY_RED,
-                ["--light-red" as any]: LIGHT_RED,
-              }}
+              style={dynamicStyle}
               className={cn(
                 "relative w-full select-none cursor-pointer",
                 "rounded-xl border-2 shadow-sm transition-all duration-200 ease-out",
                 "hover:shadow-md hover:scale-[1.02] active:scale-95",
-                "focus:outline-none focus:ring-2",
+                "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#FEE2E2]",
                 isSelected
                   ? "bg-[var(--primary-red)] border-[var(--primary-red)] text-white hover:brightness-90"
                   : "bg-white border-[var(--primary-red)] text-[var(--primary-red)] hover:bg-[var(--light-red)]",
