@@ -41,9 +41,9 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo selecionado no momento (começa no +100)
+  // combo selecionado no momento (começa no +200)
   const [selectedComboId, setSelectedComboId] =
-    useState<string | null>("combo-100")
+    useState<string | null>("combo-200")
   const [highlight, setHighlight] = useState(true)
 
   useEffect(() => {
