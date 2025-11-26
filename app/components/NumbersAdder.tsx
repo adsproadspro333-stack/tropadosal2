@@ -154,7 +154,7 @@ export default function NumbersAdder() {
                       : "text-[var(--primary-red)] decoration-[var(--primary-red)]/50",
                   )}
                 >
-                  Adicionar ao carrinho
+                  Toque para adicionar
                 </div>
               </div>
             </button>

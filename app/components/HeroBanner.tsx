@@ -16,18 +16,18 @@ export default function HeroBanner() {
 
   return (
     <Box
-      sx={{
-        width: "100%",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-        bgcolor: "#F3F4F6",
-        px: 1.5,
-        pt: 2,
-        pb: 1.5,
-        gap: 1,
-      }}
+  sx={{
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    alignItems: "center",
+    bgcolor: "#F3F4F6",
+    px: 0.5,
+    pt: 0.1,   // ✅ reduz drasticamente o espaço superior
+    pb: 1.5,
+    gap: 1,
+  }}
     >
       {/* Headline + subtítulo */}
       <Box
