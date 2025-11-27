@@ -166,7 +166,7 @@ export default function NumbersAdder() {
 
                 <div
                   className={cn(
-                    "mt-1 text-[10px] sm:text-[11px]",
+                    "mt-1 text-[10px] sm:text[11px]",
                     isSelected ? "text-white/90" : "text-slate-600",
                   )}
                 >
@@ -185,10 +185,10 @@ export default function NumbersAdder() {
                   {isSelected && (
                     <span
                       className={cn(
-                        "inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/70 bg-white/10 text-[9px] leading-none",
+                        "inline-flex items-center justify-center leading-none",
                       )}
                     >
-                      ✔
+                      ✅
                     </span>
                   )}
                   <span>{ctaText}</span>
