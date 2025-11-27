@@ -17,6 +17,24 @@ export default function FixedCTA() {
   const disabled = qty < MIN_QTY
   const [pulse, setPulse] = useState(false)
 
+  const remaining = Math.max(0, MIN_QTY - qty)
+
+  // Copy dinâmica de apoio
+  let helperText = ""
+  if (disabled) {
+    if (qty === 0) {
+      helperText =
+        "Comece escolhendo um combo ou ajustando a quantidade personalizada."
+    } else {
+      helperText = `Faltam apenas ${remaining} número${
+        remaining > 1 ? "s" : ""
+      } para liberar sua participação.`
+    }
+  } else {
+    helperText =
+      "Na próxima etapa você revisa seus dados e confirma o pagamento em poucos segundos."
+  }
+
   // pulso suave automático a cada 9s se estiver habilitado
   useEffect(() => {
     if (disabled) return
@@ -57,7 +75,7 @@ export default function FixedCTA() {
           mx: "auto",
           display: "flex",
           flexDirection: "column",
-          gap: 1,
+          gap: 0.75,
         }}
       >
         {/* 🔢 Info dinâmica */}
@@ -65,17 +83,15 @@ export default function FixedCTA() {
           {qty} números • Total: {formatBRL(totalInCents / 100)}
         </Typography>
 
-        {/* ⚠️ Aviso educativo se abaixo do mínimo */}
-        {disabled && (
-          <Typography
-            textAlign="center"
-            fontSize="12px"
-            fontWeight={500}
-            color="#dc2626"
-          >
-            Selecione no mínimo {MIN_QTY} números para continuar.
-          </Typography>
-        )}
+        {/* ⚠️ Mensagem guiando o próximo passo */}
+        <Typography
+          textAlign="center"
+          fontSize="12px"
+          fontWeight={500}
+          sx={{ color: disabled ? "#b91c1c" : "#4b5563" }}
+        >
+          {helperText}
+        </Typography>
 
         <Button
           fullWidth

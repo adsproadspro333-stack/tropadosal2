@@ -1,5 +1,6 @@
 "use client"
-import { useEffect, useState } from "react"
+
+import { useEffect, useState, type CSSProperties } from "react"
 import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
@@ -41,7 +42,7 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo selecionado no momento (começa no +200)
+  // combo selecionado no momento (começa no +200 pra puxar ticket médio)
   const [selectedComboId, setSelectedComboId] =
     useState<string | null>("combo-200")
   const [highlight, setHighlight] = useState(true)
@@ -96,14 +97,30 @@ export default function NumbersAdder() {
           const isFeatured = combo.quantity === 100 // “Mais vendido” no +100
           const isSelected = selectedComboId === combo.id
 
+          // Mensagem de benefício específica de cada combo
+          const benefitText =
+            combo.quantity === 100
+              ? "Perfeito pra começar agora"
+              : combo.quantity === 200
+              ? "Dobro de chances por R$ 19,90"
+              : combo.quantity === 500
+              ? "Pra acelerar de verdade"
+              : "Combo máximo pra esgotar a edição"
+
+          const ctaText = isSelected
+            ? "Adicionado! Toque pra aumentar"
+            : "Toque para adicionar"
+
           // ✨ Glow + micro animação só quando o combo está selecionado
-          const dynamicStyle: React.CSSProperties = {
+          const dynamicStyle: CSSProperties = {
             ["--primary-red" as any]: PRIMARY_RED,
             ["--light-red" as any]: LIGHT_RED,
             boxShadow: isSelected
               ? "0 0 0 1px rgba(139,0,0,0.7), 0 10px 22px rgba(139,0,0,0.45)"
               : "0 2px 6px rgba(15,23,42,0.12)",
-            transform: isSelected ? "translateY(-1px) scale(1.02)" : "translateY(0) scale(1)",
+            transform: isSelected
+              ? "translateY(-1px) scale(1.02)"
+              : "translateY(0) scale(1)",
             transition: "transform 0.18s ease, box-shadow 0.18s ease",
           }
 
@@ -142,20 +159,32 @@ export default function NumbersAdder() {
                 <div className="text-sm font-semibold mb-1">
                   +{combo.quantity} Números
                 </div>
+
                 <div className="text-base sm:text-lg font-extrabold leading-none">
                   {formatBRL(combo.priceCents / 100)}
                 </div>
 
                 <div
-                  className={cn(
-                    "mt-2 text-[11px] sm:text-xs underline underline-offset-2",
-                    isSelected
-                      ? "text-white decoration-white/70"
-                      : "text-[var(--primary-red)] decoration-[var(--primary-red)]/50",
-                  )}
-                >
-                  Toque para adicionar
-                </div>
+  className={cn(
+    "mt-1 text-[10px] sm:text-[11px]",
+    isSelected
+      ? "text-white/90"
+      : "text-slate-600"
+  )}
+>
+  {benefitText}
+</div>
+
+                <div
+  className={cn(
+    "mt-2 text-[11px] sm:text-xs underline underline-offset-2",
+    isSelected
+      ? "text-white font-semibold decoration-white/80"
+      : "text-[var(--primary-red)] decoration-[var(--primary-red)]/50",
+  )}
+>
+  {ctaText}
+</div>
               </div>
             </button>
           )

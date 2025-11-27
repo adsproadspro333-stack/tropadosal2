@@ -1,9 +1,14 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-// 🎯 Regras de preço
+// 🎯 Regras de preço base (personalizado)
 const BASE_MIN_QTY = 100
 const BASE_MIN_PRICE_CENTS = 990 // 100 números = R$ 9,90
+const UNIT_PRICE = BASE_MIN_PRICE_CENTS / BASE_MIN_QTY // 9,9 centavos
+
+// 🎯 Combo padrão da home (100 / 9,90)
+const DEFAULT_COMBO_QTY = 100
+const DEFAULT_COMBO_PRICE_CENTS = 990
 
 export type CartState = {
   baseQty: number
@@ -23,78 +28,81 @@ export type CartState = {
 export const useCartStore = create<CartState>()(
   persist(
     (set) => ({
-      // 🧊 Começa ZERADO pra não confundir o lead
+      // 🟢 Começa com o combo padrão já selecionado (100 / 9,90)
       baseQty: 0,
       baseAmountInCents: 0,
-      comboQty: 0,
-      combosTotalInCents: 0,
-      qty: 0,
-      totalInCents: 0,
+      comboQty: DEFAULT_COMBO_QTY,
+      combosTotalInCents: DEFAULT_COMBO_PRICE_CENTS,
+      qty: DEFAULT_COMBO_QTY,
+      totalInCents: DEFAULT_COMBO_PRICE_CENTS,
 
+      // Ajusta SOMENTE a parte personalizada (baseQty)
       setBaseQty: (n: number) => {
-        // agora pode ser 0 pra começar zerado
-        const MIN_QTY = 0
-        let newQty = Math.max(MIN_QTY, Math.floor(Number(n) || 0))
+        const newBaseQty = Math.max(0, Math.floor(Number(n) || 0))
 
         set((state) => {
-          const pricePerUnit = BASE_MIN_PRICE_CENTS / BASE_MIN_QTY
-          const baseAmountInCents = Math.round(newQty * pricePerUnit)
-
-          return {
-            baseQty: newQty,
-            baseAmountInCents,
-            qty: newQty + state.comboQty,
-            totalInCents: baseAmountInCents + state.combosTotalInCents,
-          }
-        })
-      },
-
-      handleChangeQuantity: (newTotalQty: number) => {
-        // mínimo total agora pode ser 0 também
-        const MIN_TOTAL_QTY = 0
-        let adjustedTotalQty = Math.max(
-          MIN_TOTAL_QTY,
-          Math.floor(Number(newTotalQty) || 0),
-        )
-
-        set((state) => {
-          // base = total - combos (nunca negativo)
-          const newBaseQty = Math.max(0, adjustedTotalQty - state.comboQty)
-          const pricePerUnit = BASE_MIN_PRICE_CENTS / BASE_MIN_QTY
-          const baseAmountInCents = Math.round(newBaseQty * pricePerUnit)
+          const baseAmountInCents = Math.round(newBaseQty * UNIT_PRICE)
+          const totalQty = newBaseQty + state.comboQty
 
           return {
             baseQty: newBaseQty,
             baseAmountInCents,
-            qty: newBaseQty + state.comboQty,
+            qty: totalQty,
             totalInCents: baseAmountInCents + state.combosTotalInCents,
           }
         })
       },
 
-      addComboToCart: (quantity: number, priceCents: number) => {
-        set((state) => ({
-          comboQty: state.comboQty + quantity,
-          combosTotalInCents: state.combosTotalInCents + priceCents,
-          qty: state.baseQty + state.comboQty + quantity,
-          totalInCents:
-            state.baseAmountInCents + state.combosTotalInCents + priceCents,
-        }))
-      },
+      // Controla o TOTAL, respeitando o combo atual como mínimo
+      handleChangeQuantity: (newTotalQty: number) => {
+        set((state) => {
+          const rawTarget = Math.floor(Number(newTotalQty) || 0)
 
-      clearCart: () => {
-        // limpar = voltar pra 0, não pra 100
-        set({
-          baseQty: 0,
-          baseAmountInCents: 0,
-          comboQty: 0,
-          combosTotalInCents: 0,
-          qty: 0,
-          totalInCents: 0,
+          // total nunca pode ser menor que o combo já escolhido
+          const targetTotal = Math.max(state.comboQty, rawTarget)
+
+          const newBaseQty = Math.max(0, targetTotal - state.comboQty)
+          const baseAmountInCents = Math.round(newBaseQty * UNIT_PRICE)
+
+          return {
+            baseQty: newBaseQty,
+            baseAmountInCents,
+            qty: targetTotal,
+            totalInCents: baseAmountInCents + state.combosTotalInCents,
+          }
         })
       },
 
-      // 🔥 Usado no upsell da /pagamento-confirmado
+      // 🔴 Combo agora SUBSTITUI o combo anterior (não soma mais)
+      addComboToCart: (quantity: number, priceCents: number) => {
+        set((state) => {
+          const comboQty = quantity
+          const combosTotalInCents = priceCents
+          const totalQty = state.baseQty + comboQty
+
+          return {
+            comboQty,
+            combosTotalInCents,
+            qty: totalQty,
+            totalInCents: state.baseAmountInCents + combosTotalInCents,
+          }
+        })
+      },
+
+      // "Limpar" volta pro estado padrão: 100 / 9,90
+      clearCart: () => {
+        set({
+          baseQty: 0,
+          baseAmountInCents: 0,
+          comboQty: DEFAULT_COMBO_QTY,
+          combosTotalInCents: DEFAULT_COMBO_PRICE_CENTS,
+          qty: DEFAULT_COMBO_QTY,
+          totalInCents: DEFAULT_COMBO_PRICE_CENTS,
+        })
+      },
+
+      // 🔥 Upsell na /pagamento-confirmado — mantemos igual:
+      // monta um NOVO pedido só com o upsell
       prepareUpsellOrder: (quantity: number, priceCents: number) => {
         set(() => {
           const baseQty = 0

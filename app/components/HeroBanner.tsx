@@ -16,18 +16,18 @@ export default function HeroBanner() {
 
   return (
     <Box
-  sx={{
-    width: "100%",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "center",
-    alignItems: "center",
-    bgcolor: "#F3F4F6",
-    px: 1.5,
-    pt: 0.1,   // ✅ reduz drasticamente o espaço superior
-    pb: 1.5,
-    gap: 1,
-  }}
+      sx={{
+        width: "100%",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center",
+        bgcolor: "#F3F4F6",
+        px: 1.5,
+        pt: 0.1,      // margem superior reduzida
+        pb: 1.5,
+        gap: 1,
+      }}
     >
       {/* Headline + subtítulo */}
       <Box
@@ -70,7 +70,7 @@ export default function HeroBanner() {
         </Typography>
       </Box>
 
-      {/* Banner */}
+      {/* Banner principal */}
       <Box
         sx={{
           position: "relative",
@@ -91,7 +91,7 @@ export default function HeroBanner() {
           sx={{
             position: "relative",
             width: "100%",
-            paddingTop: "60%",
+            paddingTop: "60%", // mostra mais da arte
           }}
         >
           <Image
@@ -119,7 +119,7 @@ export default function HeroBanner() {
             overflow: "hidden",
           }}
         >
-          {/* Header */}
+          {/* Header do accordion */}
           <Box
             onClick={() => setOpenPremios((prev) => !prev)}
             sx={{
@@ -164,7 +164,7 @@ export default function HeroBanner() {
             </IconButton>
           </Box>
 
-          {/* Conteúdo */}
+          {/* Conteúdo do accordion */}
           <Collapse in={openPremios}>
             <Box
               sx={{
@@ -185,6 +185,7 @@ export default function HeroBanner() {
               ].map((item) => (
                 <Typography
                   key={item}
+                  component="div" // ✅ evita <div> dentro de <p>
                   sx={{
                     fontSize: "0.85rem",
                     color: "#111827",
@@ -195,13 +196,15 @@ export default function HeroBanner() {
                   }}
                 >
                   <Box
+                    component="span" // ✅ vira um span, seguro dentro do texto
                     sx={{
+                      display: "inline-block",
                       width: 6,
                       height: 6,
                       borderRadius: "50%",
                       bgcolor: "#B91C1C",
                     }}
-                  />{" "}
+                  />
                   {item}
                 </Typography>
               ))}
