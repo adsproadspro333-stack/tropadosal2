@@ -55,7 +55,7 @@ export default function ScratchersCombos() {
                   </Typography>
                   <Box mt={1}>
                     <Typography variant="caption" color="primary" fontWeight={700}>
-                      Toque para adicionar
+                      Selecionar combo
                     </Typography>
                   </Box>
                 </CardContent>

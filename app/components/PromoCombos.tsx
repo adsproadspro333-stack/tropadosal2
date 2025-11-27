@@ -75,7 +75,7 @@ export default function PromoCombos() {
                       R$ {(combo.price / combo.quantity).toFixed(3)} por número
                     </Typography>
                     <Typography variant="caption" display="block" color="primary" fontWeight={700} sx={{ mt: 1 }}>
-                      Toque para adicionar ao carrinho
+                      Selecionar Combo
                     </Typography>
                   </CardContent>
                 </CardActionArea>

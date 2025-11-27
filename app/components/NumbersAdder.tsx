@@ -108,8 +108,8 @@ export default function NumbersAdder() {
               : "Combo máximo pra esgotar a edição"
 
           const ctaText = isSelected
-            ? "Adicionado! Toque pra aumentar"
-            : "Toque para adicionar"
+            ? "Combo selecionado"
+            : "Selecionar combo"
 
           // ✨ Glow + micro animação só quando o combo está selecionado
           const dynamicStyle: CSSProperties = {
@@ -165,26 +165,34 @@ export default function NumbersAdder() {
                 </div>
 
                 <div
-  className={cn(
-    "mt-1 text-[10px] sm:text-[11px]",
-    isSelected
-      ? "text-white/90"
-      : "text-slate-600"
-  )}
->
-  {benefitText}
-</div>
+                  className={cn(
+                    "mt-1 text-[10px] sm:text-[11px]",
+                    isSelected ? "text-white/90" : "text-slate-600",
+                  )}
+                >
+                  {benefitText}
+                </div>
 
+                {/* CTA + check de seleção */}
                 <div
-  className={cn(
-    "mt-2 text-[11px] sm:text-xs underline underline-offset-2",
-    isSelected
-      ? "text-white font-semibold decoration-white/80"
-      : "text-[var(--primary-red)] decoration-[var(--primary-red)]/50",
-  )}
->
-  {ctaText}
-</div>
+                  className={cn(
+                    "mt-2 text-[11px] sm:text-xs flex items-center justify-center gap-1",
+                    isSelected
+                      ? "text-white font-semibold"
+                      : "text-[var(--primary-red)] underline underline-offset-2 decoration-[var(--primary-red)]/50",
+                  )}
+                >
+                  {isSelected && (
+                    <span
+                      className={cn(
+                        "inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/70 bg-white/10 text-[9px] leading-none",
+                      )}
+                    >
+                      ✔
+                    </span>
+                  )}
+                  <span>{ctaText}</span>
+                </div>
               </div>
             </button>
           )

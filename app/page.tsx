@@ -66,7 +66,7 @@ export default function HomePage() {
           pt: 2,
         }}
       >
-        {/* 1) COMBOS – logo depois do flyer, igual concorrente */}
+        {/* 1) COMBOS – logo depois do flyer */}
         <Paper
           elevation={3}
           sx={{
@@ -147,7 +147,7 @@ export default function HomePage() {
           <QuantitySelector />
         </Paper>
 
-        {/* 3) Cupom de desconto */}
+        {/* 3) COMO FUNCIONA (substitui o Cupom de desconto que não estava ativo) */}
         <Paper
           elevation={3}
           sx={{
@@ -167,7 +167,7 @@ export default function HomePage() {
               color: "#111827",
             }}
           >
-            Cupom de desconto
+            Como funciona a ação
           </Typography>
 
           <Typography
@@ -178,45 +178,69 @@ export default function HomePage() {
               color: "#6B7280",
             }}
           >
-            Se você tiver um código especial, insira aqui antes de confirmar a
-            participação.
+            É simples e rápido para participar. Veja os passos:
           </Typography>
 
-          <Stack direction="row" spacing={1}>
-            <TextField
-              size="small"
-              fullWidth
-              placeholder="DIGITE O CÓDIGO DO CUPOM"
-              sx={{
-                "& .MuiInputBase-root": {
-                  borderRadius: 999,
-                  fontSize: "0.8rem",
-                  bgcolor: "#F9FAFB",
-                },
-              }}
-              InputProps={{
-                sx: {
-                  "& input::placeholder": {
-                    color: "#9CA3AF",
-                  },
-                },
-              }}
-            />
-            <Button
-              variant="outlined"
-              size="small"
-              sx={{
-                px: 2.4,
-                fontWeight: 600,
-                borderRadius: 999,
-                fontSize: "0.78rem",
-                borderColor: "#D1D5DB",
-                color: "#4B5563",
-              }}
-              disabled
-            >
-              Aplicar
-            </Button>
+          <Stack spacing={1.1} sx={{ fontSize: "0.8rem", color: "#374151" }}>
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Box
+                sx={{
+                  mt: "3px",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: "#16A34A",
+                }}
+              />
+              <Box>
+                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                  1. Escolha a quantidade de números
+                </Typography>
+                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                  Use os combos prontos ou personalize a quantidade ideal pra você.
+                </Typography>
+              </Box>
+            </Stack>
+
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Box
+                sx={{
+                  mt: "3px",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: "#16A34A",
+                }}
+              />
+              <Box>
+                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                  2. Confirme e pague via Pix
+                </Typography>
+                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                  O pagamento é instantâneo e 100% seguro, direto no seu banco.
+                </Typography>
+              </Box>
+            </Stack>
+
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Box
+                sx={{
+                  mt: "3px",
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: "#16A34A",
+                }}
+              />
+              <Box>
+                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                  3. Receba os números e acompanhe o sorteio
+                </Typography>
+                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                  Seus números são enviados na hora e você acompanha tudo pelos canais oficiais.
+                </Typography>
+              </Box>
+            </Stack>
           </Stack>
         </Paper>
 
@@ -256,7 +280,7 @@ export default function HomePage() {
           <WinnersList initialCount={4} />
         </Paper>
 
-        {/* 5) Escassez / Progresso de vendas MAIS PARA BAIXO */}
+        {/* 5) Escassez / Progresso de vendas */}
         <Paper
           elevation={3}
           sx={{
@@ -295,11 +319,11 @@ export default function HomePage() {
           </Typography>
         </Paper>
 
-        {/* 6) Texto legal SUSEP (fora do CTA) */}
+        {/* 6) Texto legal SUSEP */}
         <FooterLegal />
       </Container>
 
-      {/* Notificações flutuantes (já com offset que fizemos lá atrás) */}
+      {/* Notificações flutuantes */}
       <SocialProofNotifications />
 
       {/* CTA fixo com seletor + valor + botão Concorrer */}
@@ -310,7 +334,6 @@ export default function HomePage() {
 
 /**
  * CTA fixo no rodapé: quantidade + valor + seletor + botão "Concorrer".
- * Sem texto legal (está no FooterLegal).
  */
 function StickyCTA() {
   const router = useRouter()
@@ -436,7 +459,7 @@ function StickyCTA() {
             </Box>
           </Stack>
 
-          {/* botão principal – com micro animação */}
+          {/* botão principal */}
           <Button
             onClick={handleClick}
             variant="contained"
