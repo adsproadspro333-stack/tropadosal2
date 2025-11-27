@@ -28,7 +28,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setToasts((t) => {
         const updated = [...t, { id, message, type }]
         // no máximo 3 toasts por vez
-        return updated.slice(-3)
+        return updated.slice(-1)
       })
 
       setTimeout(() => {

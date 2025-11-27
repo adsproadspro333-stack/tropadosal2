@@ -11,12 +11,12 @@ interface Winner {
 }
 
 const WINNERS: Winner[] = [
-  { name: "Thaynara", state: "CE", prize: "um iPhone 17" },
-  { name: "Marcos", state: "PE", prize: "1 moto 0km" },
-  { name: "Bruna", state: "BA", prize: "uma TV 75\" 4K" },
-  { name: "Rafael", state: "RJ", prize: "R$ 15.000 em pix" },
-  { name: "Carla", state: "SP", prize: "um Apple Watch Ultra" },
-  { name: "Lucas", state: "MG", prize: "1 PlayStation 5" },
+  { name: "Thaynara", state: "CE", prize: "R$ 700,00 no PIX" },
+  { name: "Marcos", state: "PE", prize: "R$ 3.000,00 no PIX" },
+  { name: "Bruna", state: "BA", prize: "R$ 20.000,00 no PIX" },
+  { name: "Rafael", state: "RJ", prize: "R$ 15.000,00 no PIX" },
+  { name: "Carla", state: "SP", prize: "R$ 5.000,00 no PIX" },
+  { name: "Lucas", state: "MG", prize: "um Iphone 17 PRO MAX" },
 ]
 
 export default function SocialProofNotifications() {
@@ -49,7 +49,7 @@ export default function SocialProofNotifications() {
     <Box
       sx={{
         position: "fixed",
-        bottom: { xs: 190, md: 200 }, // ✅ MUITO MAIS ALTO AGORA
+        bottom: { xs: 190, md: 200 },
         left: { xs: "50%", md: 40 },
         transform: { xs: "translateX(-50%)", md: "none" },
         zIndex: 998,
@@ -71,6 +71,9 @@ export default function SocialProofNotifications() {
           minWidth: 280,
           backgroundColor: "#FFFFFF",
           boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+
+          // ✅ CONTORNO VERMELHO ADICIONADO
+          border: "1.5px solid #8B0000",
         }}
       >
         <Icon icon="mdi:trophy" width={20} height={20} style={{ color: "#f59e0b" }} />
