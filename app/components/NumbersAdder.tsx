@@ -44,7 +44,7 @@ export default function NumbersAdder() {
 
   // combo selecionado no momento (começa no +200 pra puxar ticket médio)
   const [selectedComboId, setSelectedComboId] =
-    useState<string | null>("combo-200")
+    useState<string | null>("combo-100")
   const [highlight, setHighlight] = useState(true)
 
   useEffect(() => {
