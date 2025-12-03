@@ -101,8 +101,7 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // 🔥 Upsell na /pagamento-confirmado — mantemos igual:
-      // monta um NOVO pedido só com o upsell
+      // 🔥 Upsell (reforço) – monta um NOVO pedido só com o pacote
       prepareUpsellOrder: (quantity: number, priceCents: number) => {
         set(() => {
           const baseQty = 0
@@ -121,6 +120,8 @@ export const useCartStore = create<CartState>()(
         })
       },
     }),
-    { name: "cart-storage" },
+    {
+      name: "cart-storage",
+    },
   ),
 )
