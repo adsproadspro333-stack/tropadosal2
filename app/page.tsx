@@ -25,7 +25,7 @@ import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
-  // 📌 ViewContent
+  // 🔹 1) Evento de ViewContent (já existia)
   useEffect(() => {
     const eventId =
       Date.now().toString() + "-" + Math.random().toString(36).slice(2)
@@ -47,7 +47,7 @@ export default function HomePage() {
     }
   }, [])
 
-  // 📌 Lê upsell vindo de /compras (?reforco=&n=&v=)
+  // 🔹 2) Lê upsell vindo de /compras (?reforco=&n=&v=) e monta o carrinho
   useEffect(() => {
     if (typeof window === "undefined") return
 
@@ -59,7 +59,7 @@ export default function HomePage() {
     if (!qtyParam || !priceParam) return
 
     const qtyNum = Number(qtyParam)
-    const priceNum = Number(priceParam)
+    const priceNum = Number(priceParam) // v vem como "14.90"
 
     if (
       !Number.isFinite(qtyNum) ||
@@ -72,16 +72,24 @@ export default function HomePage() {
 
     const priceCents = Math.round(priceNum * 100)
 
-    // monta um pedido só com esse pacote de reforço
+    // monta um pedido só com o pacote de reforço
     useCartStore.getState().prepareUpsellOrder(qtyNum, priceCents)
+
+    console.log(
+      "[Upsell] Carrinho ajustado a partir da URL:",
+      qtyNum,
+      "números,",
+      priceCents,
+      "centavos",
+    )
   }, [])
 
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        bgcolor: "#F2F2F2",
-        pb: 18,
+        bgcolor: "#F2F2F2", // fundo claro único
+        pb: 18, // espaço pro CTA fixo
       }}
     >
       {/* Banner topo (flyer) */}
@@ -176,7 +184,7 @@ export default function HomePage() {
           <QuantitySelector />
         </Paper>
 
-        {/* 3) Como funciona a ação */}
+        {/* 3) COMO FUNCIONA */}
         <Paper
           elevation={3}
           sx={{
@@ -510,7 +518,6 @@ function StickyCTA() {
               transform: "translateY(0)",
               transition:
                 "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease",
-
               "&:hover": {
                 bgcolor: disabled ? "#9CA3AF" : "#15803D",
                 transform: disabled ? "none" : "translateY(-2px)",
@@ -518,7 +525,6 @@ function StickyCTA() {
                   ? "0 0 0 rgba(0,0,0,0)"
                   : "0px 12px 26px rgba(0,0,0,0.25)",
               },
-
               "&:active": {
                 transform: disabled ? "none" : "scale(0.97)",
                 boxShadow: disabled
