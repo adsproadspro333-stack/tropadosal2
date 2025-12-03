@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { useCartStore } from "@/store/cartStore"
 
 type TransactionDTO = {
   id: string
@@ -73,7 +75,8 @@ const UPSELL_OFFERS: UpsellOffer[] = [
     numbers: 3500,
     price: 24.9,
     badge: "Mais escolhido",
-    description: "Equilíbrio perfeito entre investimento e quantidade de números.",
+    description:
+      "Equilíbrio perfeito entre investimento e quantidade de números.",
   },
   {
     id: "reforco-10000",
@@ -86,6 +89,9 @@ const UPSELL_OFFERS: UpsellOffer[] = [
 ]
 
 export default function MinhasComprasPage() {
+  const router = useRouter()
+  const { prepareUpsellOrder } = useCartStore()
+
   const [cpf, setCpf] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,7 +100,7 @@ export default function MinhasComprasPage() {
 
   // 🔥 Estados do sorteio em tempo real
   const [remainingSeconds, setRemainingSeconds] = useState(
-    INITIAL_TIMER_SECONDS
+    INITIAL_TIMER_SECONDS,
   )
   const [currentWinnerIndex, setCurrentWinnerIndex] = useState(0)
   const [showUpsell, setShowUpsell] = useState(false)
@@ -211,13 +217,18 @@ export default function MinhasComprasPage() {
   }
 
   // 🔗 Ação ao clicar em uma oferta de reforço
-  // Agora mandando o lead para /dados com os parâmetros da oferta
+  // Agora montando o carrinho via cartStore e levando pra /dados
   const handleSelectUpsell = (offer: UpsellOffer) => {
-    if (typeof window !== "undefined") {
-      const url = `/dados?reforco=${offer.id}&n=${offer.numbers}&v=${offer.price.toFixed(
-        2
-      )}&from=compras`
-      window.location.href = url
+    try {
+      const priceCents = Math.round(offer.price * 100)
+
+      // monta um NOVO pedido com esse reforço
+      prepareUpsellOrder(offer.numbers, priceCents)
+
+      // segue o fluxo normal do checkout a partir da /dados
+      router.push(`/dados?from=compras&reforco=${offer.id}`)
+    } catch (err) {
+      console.error("Erro ao aplicar upsell de compras:", err)
     }
   }
 
@@ -324,7 +335,8 @@ export default function MinhasComprasPage() {
                     opacity: 0.85,
                   }}
                 >
-                  Essa área é só pra reforçar suas chances, sem refazer cadastro.
+                  Essa área é só pra reforçar suas chances, sem refazer
+                  cadastro.
                 </span>
               )}
             </div>
@@ -497,7 +509,9 @@ export default function MinhasComprasPage() {
                       display: "flex",
                       flexDirection: isMobile ? "column" : "row",
                       alignItems: isMobile ? "flex-start" : "center",
-                      justifyContent: isMobile ? "flex-start" : "space-between",
+                      justifyContent: isMobile
+                        ? "flex-start"
+                        : "space-between",
                       gap: isMobile ? 6 : 10,
                       flexWrap: "wrap",
                     }}
@@ -526,7 +540,8 @@ export default function MinhasComprasPage() {
                               padding: "2px 6px",
                               borderRadius: 999,
                               backgroundColor: "rgba(250,204,21,0.12)",
-                              border: "1px solid rgba(250,204,21,0.7)",
+                              border:
+                                "1px solid rgba(250,204,21,0.7)",
                               color: "#FACC15",
                               textTransform: "uppercase",
                               letterSpacing: 0.4,
@@ -546,7 +561,8 @@ export default function MinhasComprasPage() {
                       >
                         +{" "}
                         <strong style={{ color: "#BBF7D0" }}>
-                          {offer.numbers.toLocaleString("pt-BR")} números extras
+                          {offer.numbers.toLocaleString("pt-BR")} números
+                          extras
                         </strong>
                       </div>
                       <div
@@ -738,7 +754,9 @@ export default function MinhasComprasPage() {
                     }}
                   >
                     ID do pedido:{" "}
-                    <span style={{ fontWeight: 600, color: "#111827" }}>
+                    <span
+                      style={{ fontWeight: 600, color: "#111827" }}
+                    >
                       {order.displayOrderCode}
                     </span>
                   </div>
