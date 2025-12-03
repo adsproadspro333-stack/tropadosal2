@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import {
   Container,
@@ -27,6 +27,10 @@ export default function DadosPage() {
   const [phone, setPhone] = useState("")
   const [birthdate, setBirthdate] = useState("")
   const [error, setError] = useState("")
+  const [autoFillMessage, setAutoFillMessage] = useState("")
+  const [autoFillCheckedCpf, setAutoFillCheckedCpf] = useState<string | null>(
+    null
+  )
 
   // Formatadores simples
   const formatCPF = (value: string) => {
@@ -87,6 +91,7 @@ export default function DadosPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
+    setAutoFillMessage("")
 
     if (!validateForm()) return
 
@@ -98,6 +103,58 @@ export default function DadosPage() {
 
     router.push("/confirmacao")
   }
+
+  // 🔥 Autofill inteligente baseado no último checkout salvo no navegador
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const cleanCpf = cpf.replace(/\D/g, "")
+    if (cleanCpf.length !== 11) {
+      setAutoFillMessage("")
+      return
+    }
+
+    // evita ficar checando o mesmo CPF toda hora
+    if (autoFillCheckedCpf === cleanCpf) return
+
+    try {
+      const stored = localStorage.getItem("checkoutCustomer")
+      if (!stored) {
+        setAutoFillCheckedCpf(cleanCpf)
+        setAutoFillMessage("")
+        return
+      }
+
+      const data = JSON.parse(stored) as {
+        cpf?: string
+        nome?: string
+        email?: string
+        phone?: string
+        birthdate?: string
+      }
+
+      const storedCleanCpf = (data.cpf || "").replace(/\D/g, "")
+      if (storedCleanCpf && storedCleanCpf === cleanCpf) {
+        // preenche automaticamente
+        if (data.nome) setNome(data.nome)
+        if (data.email) setEmail(data.email)
+        if (data.phone) setPhone(data.phone)
+        if (data.birthdate) setBirthdate(data.birthdate)
+
+        setAutoFillMessage(
+          "Encontramos seus dados da sua última participação e preenchemos automaticamente."
+        )
+      } else {
+        setAutoFillMessage("")
+      }
+
+      setAutoFillCheckedCpf(cleanCpf)
+    } catch (err) {
+      console.error("Erro ao tentar autofill de checkoutCustomer:", err)
+      setAutoFillMessage("")
+      setAutoFillCheckedCpf(cleanCpf)
+    }
+  }, [cpf, autoFillCheckedCpf])
 
   return (
     <Box sx={{ bgcolor: "background.default", minHeight: "100vh" }}>
@@ -207,12 +264,23 @@ export default function DadosPage() {
             </Typography>
           </Box>
 
+          {/* Mensagem de autofill (se rolou) */}
+          {autoFillMessage && !error && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {autoFillMessage}
+            </Alert>
+          )}
+
           {/* Formulário */}
           <Box component="form" onSubmit={handleSubmit}>
             <TextField
               label="CPF *"
               value={cpf}
-              onChange={(e) => setCpf(formatCPF(e.target.value))}
+              onChange={(e) => {
+                setError("")
+                setAutoFillMessage("")
+                setCpf(formatCPF(e.target.value))
+              }}
               fullWidth
               required
               margin="normal"
