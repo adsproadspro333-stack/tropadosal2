@@ -8,7 +8,6 @@ import {
   Typography,
   Stack,
   Button,
-  TextField,
   Divider,
 } from "@mui/material"
 import { useRouter } from "next/navigation"
@@ -26,7 +25,7 @@ import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
-  // 📌 1) Disparo do ViewContent (mantido)
+  // 📌 ViewContent
   useEffect(() => {
     const eventId =
       Date.now().toString() + "-" + Math.random().toString(36).slice(2)
@@ -48,7 +47,7 @@ export default function HomePage() {
     }
   }, [])
 
-  // 📌 2) Leitura do upsell vindo da /compras (?reforco=&n=&v=)
+  // 📌 Lê upsell vindo de /compras (?reforco=&n=&v=)
   useEffect(() => {
     if (typeof window === "undefined") return
 
@@ -73,18 +72,16 @@ export default function HomePage() {
 
     const priceCents = Math.round(priceNum * 100)
 
-    // 🧠 monta um pedido só com esse pacote de reforço
+    // monta um pedido só com esse pacote de reforço
     useCartStore.getState().prepareUpsellOrder(qtyNum, priceCents)
-
-    // (opcional: se quiser limpar os params depois, dá pra usar history.replaceState aqui)
   }, [])
 
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        bgcolor: "#F2F2F2", // fundo claro único
-        pb: 18, // espaço pro CTA fixo
+        bgcolor: "#F2F2F2",
+        pb: 18,
       }}
     >
       {/* Banner topo (flyer) */}
@@ -149,7 +146,7 @@ export default function HomePage() {
             p: 1.8,
             borderRadius: 2,
             bgcolor: "#FFFFFF",
-            border: "1px solid "#E5E7EB",
+            border: "1px solid #E5E7EB",
           }}
         >
           <Typography
