@@ -26,6 +26,7 @@ import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
+  // 📌 1) Disparo do ViewContent (mantido)
   useEffect(() => {
     const eventId =
       Date.now().toString() + "-" + Math.random().toString(36).slice(2)
@@ -45,6 +46,37 @@ export default function HomePage() {
     } catch (err) {
       console.warn("⚠️ Erro ao disparar ViewContent:", err)
     }
+  }, [])
+
+  // 📌 2) Leitura do upsell vindo da /compras (?reforco=&n=&v=)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const params = new URLSearchParams(window.location.search)
+
+    const qtyParam = params.get("n")
+    const priceParam = params.get("v")
+
+    if (!qtyParam || !priceParam) return
+
+    const qtyNum = Number(qtyParam)
+    const priceNum = Number(priceParam)
+
+    if (
+      !Number.isFinite(qtyNum) ||
+      qtyNum <= 0 ||
+      !Number.isFinite(priceNum) ||
+      priceNum <= 0
+    ) {
+      return
+    }
+
+    const priceCents = Math.round(priceNum * 100)
+
+    // 🧠 monta um pedido só com esse pacote de reforço
+    useCartStore.getState().prepareUpsellOrder(qtyNum, priceCents)
+
+    // (opcional: se quiser limpar os params depois, dá pra usar history.replaceState aqui)
   }, [])
 
   return (
@@ -117,7 +149,7 @@ export default function HomePage() {
             p: 1.8,
             borderRadius: 2,
             bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
+            border: "1px solid "#E5E7EB",
           }}
         >
           <Typography
@@ -147,7 +179,7 @@ export default function HomePage() {
           <QuantitySelector />
         </Paper>
 
-        {/* 3) COMO FUNCIONA (substitui o Cupom de desconto que não estava ativo) */}
+        {/* 3) Como funciona a ação */}
         <Paper
           elevation={3}
           sx={{
@@ -237,14 +269,15 @@ export default function HomePage() {
                   3. Receba os números e acompanhe o sorteio
                 </Typography>
                 <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
-                  Seus números são enviados na hora e você acompanha tudo pelos canais oficiais.
+                  Seus números são enviados na hora e você acompanha tudo pelos
+                  canais oficiais.
                 </Typography>
               </Box>
             </Stack>
           </Stack>
         </Paper>
 
-        {/* 4) Ganhadores recentes (prova social) */}
+        {/* 4) Ganhadores recentes */}
         <Paper
           elevation={3}
           sx={{
