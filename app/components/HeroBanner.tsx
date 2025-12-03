@@ -9,9 +9,37 @@ export default function HeroBanner() {
   const [mounted, setMounted] = useState(false)
   const [openPremios, setOpenPremios] = useState(false)
 
+  // ⏱ Timer VISUAL de 30 minutos (não mexe em preço, nem em carrinho)
+  const [timerText, setTimerText] = useState("30:00")
+
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 30)
     return () => clearTimeout(t)
+  }, [])
+
+  useEffect(() => {
+    const DURATION_MS = 30 * 60 * 1000 // 30min
+    const endAt = Date.now() + DURATION_MS
+
+    const interval = setInterval(() => {
+      const diff = endAt - Date.now()
+
+      if (diff <= 0) {
+        setTimerText("00:00")
+        clearInterval(interval)
+        return
+      }
+
+      const minutes = Math.floor(diff / 60000)
+      const seconds = Math.floor((diff % 60000) / 1000)
+
+      const mm = String(minutes).padStart(2, "0")
+      const ss = String(seconds).padStart(2, "0")
+
+      setTimerText(`${mm}:${ss}`)
+    }, 1000)
+
+    return () => clearInterval(interval)
   }, [])
 
   return (
@@ -108,6 +136,71 @@ export default function HeroBanner() {
         </Box>
       </Box>
 
+      {/* 🔥 Faixa “Compre agora e ganhe o dobro” com timer visual */}
+      <Box sx={{ width: "100%", maxWidth: 420, mt: 1 }}>
+        <Box
+          sx={{
+            borderRadius: 2,
+            bgcolor: "#B91C1C",
+            color: "#ffffff",
+            px: 2,
+            py: 1.2,
+            boxShadow: "0 10px 22px rgba(185,28,28,0.45)",
+          }}
+        >
+          <Typography
+            sx={{
+              fontWeight: 800,
+              fontSize: "0.98rem",
+            }}
+          >
+            Compre agora e ganhe o dobro
+          </Typography>
+
+          <Box
+            sx={{
+              mt: 0.4,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1.5,
+            }}
+          >
+            <Typography
+              sx={{
+                fontSize: "0.8rem",
+                opacity: 0.95,
+              }}
+            >
+              Encerra em{" "}
+              <Box component="span" sx={{ fontWeight: 700 }}>
+                {timerText}
+              </Box>
+            </Typography>
+
+            <Box
+              sx={{
+                flexShrink: 0,
+                width: 90,
+                height: 6,
+                borderRadius: 999,
+                bgcolor: "#FCA5A5",
+                overflow: "hidden",
+              }}
+            >
+              <Box
+                sx={{
+                  width: "100%",
+                  height: "100%",
+                  bgcolor: "#FEE2E2",
+                  opacity: 0.9,
+                }}
+              />
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+
       {/* PRÊMIOS DA AÇÃO */}
       <Box sx={{ width: "100%", maxWidth: 420, mt: 1 }}>
         <Box
@@ -196,7 +289,7 @@ export default function HeroBanner() {
                   }}
                 >
                   <Box
-                    component="span" // ✅ vira um span, seguro dentro do texto
+                    component="span"
                     sx={{
                       display: "inline-block",
                       width: 6,
