@@ -19,13 +19,14 @@ import NumbersAdder from "./components/NumbersAdder"
 import WinnersList from "./components/WinnersList"
 import SocialProofNotifications from "./components/SocialProofNotifications"
 import FooterLegal from "./components/FooterLegal"
+import ActionPrizesCard from "./components/ActionPrizesCard" // 👈 NOVO CARD
 
 import { trackViewContent } from "@/lib/fbq"
 import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
-  // 🔹 1) Evento de ViewContent (já existia)
+  // 🔹 1) Evento de ViewContent
   useEffect(() => {
     const eventId =
       Date.now().toString() + "-" + Math.random().toString(36).slice(2)
@@ -47,7 +48,7 @@ export default function HomePage() {
     }
   }, [])
 
-  // 🔹 2) Lê upsell vindo de /compras (?reforco=&n=&v=) e monta o carrinho
+  // 🔹 2) Upsell vindo de /compras (?reforco=&n=&v=)
   useEffect(() => {
     if (typeof window === "undefined") return
 
@@ -88,30 +89,41 @@ export default function HomePage() {
     <Box
       sx={{
         minHeight: "100vh",
-        bgcolor: "#F2F2F2", // fundo claro único
+        bgcolor: "#F2F2F2",
         pb: 18, // espaço pro CTA fixo
       }}
     >
       {/* Banner topo (flyer) */}
-      <HeroBanner />
+      <Box
+        sx={{
+          position: "relative",
+          pb: { xs: 7, sm: 4 }, // espaço pra encaixar combos
+        }}
+      >
+        <HeroBanner />
+      </Box>
 
-      {/* Conteúdo central estilo app de rifa */}
+      {/* Conteúdo central estilo app */}
       <Container
         maxWidth="sm"
         sx={{
           px: { xs: 2, sm: 0 },
-          pt: 2,
+          pt: { xs: 0, sm: 2 },
+          mt: { xs: -8, sm: 0 }, // puxa combos pra cima no mobile
+          position: "relative",
+          zIndex: 2,
         }}
       >
-        {/* 1) COMBOS – logo depois do flyer */}
+        {/* 1) COMBOS */}
         <Paper
-          elevation={3}
+          elevation={4}
           sx={{
             mb: 2,
             p: 1.8,
-            borderRadius: 2,
+            borderRadius: 2.5,
             bgcolor: "#FFFFFF",
             border: "1px solid #E5E7EB",
+            boxShadow: "0 18px 40px rgba(15,23,42,0.25)",
           }}
         >
           <Stack
@@ -145,6 +157,9 @@ export default function HomePage() {
 
           <NumbersAdder />
         </Paper>
+
+        {/* 1.5) PRÊMIOS DA AÇÃO – novo card logo abaixo dos combos */}
+        <ActionPrizesCard />
 
         {/* 2) Quantidade personalizada */}
         <Paper
@@ -184,7 +199,7 @@ export default function HomePage() {
           <QuantitySelector />
         </Paper>
 
-        {/* 3) COMO FUNCIONA */}
+        {/* 3) Como funciona */}
         <Paper
           elevation={3}
           sx={{
@@ -234,7 +249,8 @@ export default function HomePage() {
                   1. Escolha a quantidade de números
                 </Typography>
                 <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
-                  Use os combos prontos ou personalize a quantidade ideal pra você.
+                  Use os combos prontos ou personalize a quantidade ideal pra
+                  você.
                 </Typography>
               </Box>
             </Stack>
@@ -318,7 +334,7 @@ export default function HomePage() {
           <WinnersList initialCount={4} />
         </Paper>
 
-        {/* 5) Escassez / Progresso de vendas */}
+        {/* 5) Progresso de vendas */}
         <Paper
           elevation={3}
           sx={{
@@ -364,7 +380,7 @@ export default function HomePage() {
       {/* Notificações flutuantes */}
       <SocialProofNotifications />
 
-      {/* CTA fixo com seletor + valor + botão Concorrer */}
+      {/* CTA fixo */}
       <StickyCTA />
     </Box>
   )
@@ -462,7 +478,7 @@ function StickyCTA() {
                   px: 2,
                   py: 0.7,
                   borderRadius: 999,
-                  border: "1px solid #D1D5DB",
+                  border: "1px solid #D1D5DB", // ✅ arrumado
                   minWidth: 64,
                   textAlign: "center",
                   bgcolor: "#F9FAFB",
