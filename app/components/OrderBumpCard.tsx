@@ -15,15 +15,21 @@ import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 
 const BUMP_QTY = 2000          // +2.000 números extras
-const BUMP_PRICE_CENTS = 990   // ✅ agora por R$ 9,90
+const BUMP_PRICE_CENTS = 990   // R$ 9,90
 
 // tempo inicial do contador: 1 minuto
 const INITIAL_MINUTES = 1
 const INITIAL_SECONDS = 0
 
 export default function OrderBumpCard() {
-  const { addComboToCart } = useCartStore()
+  const {
+    addOrderBump,
+    bumpQty,
+    bumpAmountInCents,
+  } = useCartStore()
   const { show } = useToast()
+
+  // aplicado local (sincronizado com o store)
   const [applied, setApplied] = useState(false)
 
   // estado do contador em segundos
@@ -31,9 +37,15 @@ export default function OrderBumpCard() {
     INITIAL_MINUTES * 60 + INITIAL_SECONDS,
   )
 
-  // efeito para fazer o contador descer usando o tempo real (não trava em produção)
+  // Se o bump já estiver no carrinho (ex: recarregou a página), marca como aplicado
   useEffect(() => {
-    // se a oferta já foi aplicada, nem precisa contar mais
+    if (bumpQty >= BUMP_QTY && bumpAmountInCents >= BUMP_PRICE_CENTS) {
+      setApplied(true)
+    }
+  }, [bumpQty, bumpAmountInCents])
+
+  // efeito para fazer o contador descer usando o tempo real
+  useEffect(() => {
     if (applied) return
 
     const totalSeconds = INITIAL_MINUTES * 60 + INITIAL_SECONDS
@@ -66,11 +78,14 @@ export default function OrderBumpCard() {
   const handleApply = () => {
     if (applied) return
 
-    addComboToCart(BUMP_QTY, BUMP_PRICE_CENTS)
+    // ✅ agora o bump SOMA números e valor em cima do que já existe
+    addOrderBump(BUMP_QTY, BUMP_PRICE_CENTS)
     setApplied(true)
 
     show(
-      `🚀 Oferta especial ativada! +${BUMP_QTY} números adicionados <b>(${formatBRL(
+      `🚀 Oferta especial ativada! +${BUMP_QTY.toLocaleString(
+        "pt-BR",
+      )} números adicionados <b>(${formatBRL(
         BUMP_PRICE_CENTS / 100,
       )})</b>`,
       "special-2000-990",
