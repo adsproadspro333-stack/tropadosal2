@@ -59,8 +59,8 @@ export const useCartStore = create<CartState>()(
 
         set((state) => {
           const baseAmountInCents = Math.round(newBaseQty * UNIT_PRICE)
-          const totalQty =
-            newBaseQty + state.comboQty + state.bumpQty
+          const totalCoreQty = newBaseQty + state.comboQty
+          const totalQty = totalCoreQty + state.bumpQty
 
           return {
             baseQty: newBaseQty,
@@ -74,19 +74,19 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // Controla o TOTAL “visível” (combo + personalizado)
-      // 🔹 O order bump é extra e sempre SOMA por fora.
+      // Controla o TOTAL, respeitando o combo atual como mínimo
+      // (bump é sempre EXTRA, somado por fora)
       handleChangeQuantity: (newTotalQty: number) => {
         set((state) => {
           const rawTarget = Math.floor(Number(newTotalQty) || 0)
 
-          // mínimo sempre é o combo já escolhido
-          const coreTarget = Math.max(state.comboQty, rawTarget)
+          // total “core” nunca pode ser menor que o combo já escolhido
+          const targetCoreTotal = Math.max(state.comboQty, rawTarget)
 
-          const newBaseQty = Math.max(0, coreTarget - state.comboQty)
+          const newBaseQty = Math.max(0, targetCoreTotal - state.comboQty)
           const baseAmountInCents = Math.round(newBaseQty * UNIT_PRICE)
 
-          const totalQty = coreTarget + state.bumpQty
+          const totalQty = targetCoreTotal + state.bumpQty
 
           return {
             baseQty: newBaseQty,
@@ -100,11 +100,12 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // 🔴 Combo agora SUBSTITUI o combo anterior (não soma mais)
+      // 🔴 Combo SUBSTITUI o combo anterior (comportamento que você já tinha)
       addComboToCart: (quantity: number, priceCents: number) => {
         set((state) => {
           const comboQty = quantity
           const combosTotalInCents = priceCents
+
           const coreQty = state.baseQty + comboQty
           const totalQty = coreQty + state.bumpQty
 
@@ -135,7 +136,7 @@ export const useCartStore = create<CartState>()(
       },
 
       // 🔥 Upsell (reforço) – monta um NOVO pedido só com o pacote
-      // (usado quando vem de /compras?reforco=...)
+      // (quando vem de /compras?reforco=...)
       prepareUpsellOrder: (quantity: number, priceCents: number) => {
         set(() => {
           const baseQty = 0
@@ -157,14 +158,14 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // ✅ Order Bump: soma +2000 números e +R$ 9,90 ao pedido
+      // ✅ Order Bump: soma números + valor em cima do pedido já existente
       addOrderBump: (quantity: number, priceCents: number) => {
         set((state) => {
           const bumpQty = quantity
           const bumpAmountInCents = priceCents
 
-          const totalQty =
-            state.baseQty + state.comboQty + bumpQty
+          const coreQty = state.baseQty + state.comboQty
+          const totalQty = coreQty + bumpQty
 
           return {
             bumpQty,
@@ -178,15 +179,15 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // Remover bump (se algum dia quiser permitir isso)
+      // Se algum dia você quiser remover o bump
       removeOrderBump: () => {
         set((state) => {
-          const totalQty = state.baseQty + state.comboQty
+          const coreQty = state.baseQty + state.comboQty
 
           return {
             bumpQty: 0,
             bumpAmountInCents: 0,
-            qty: totalQty,
+            qty: coreQty,
             totalInCents:
               state.baseAmountInCents + state.combosTotalInCents,
           }
@@ -195,4 +196,6 @@ export const useCartStore = create<CartState>()(
     }),
     {
       name: "cart-storage",
-
+    },
+  ),
+)
