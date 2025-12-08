@@ -72,7 +72,7 @@ window.fbq = window.fbq || function() {
           <ThemeProvider theme={theme}>
             <CssBaseline />
             <ToastProvider>
-              {/* Header alinhado ao miolo (480px) mas sem criar espaço extra */}
+              {/* Header alinhado ao miolo (480px) */}
               <header style={{ width: "100%" }}>
                 <div
                   style={{
@@ -89,54 +89,7 @@ window.fbq = window.fbq || function() {
               <main className="page-content" style={{ minHeight: "100dvh" }}>
                 {children}
               </main>
-
-              {/* Rodapé simples com links legais */}
-              <footer
-                style={{
-                  width: "100%",
-                  display: "flex",
-                  justifyContent: "center",
-                  marginTop: 40,
-                  paddingBottom: 40,
-                }}
-              >
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 480,
-                    display: "flex",
-                    justifyContent: "center",
-                    gap: 32,
-                    fontSize: 12,
-                  }}
-                >
-                  <a
-                    href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/condicoes/Filantropia_1164_CG_-_PrAmios_do_Carlinhos_v.1164_2-1763555957360.pdf"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      color: "#4B5563",
-                      textDecoration: "underline",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Condições gerais
-                  </a>
-
-                  <a
-                    href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/regulamentos/Regulamento_-_PrAmios_do_Carlinhos_v.1164_2-1763555972545.pdf"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      color: "#4B5563",
-                      textDecoration: "underline",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Regulamento
-                  </a>
-                </div>
-              </footer>
+              {/* ✅ Footer global removido: Condições gerais / Regulamento agora só via FooterLegal na home */}
             </ToastProvider>
           </ThemeProvider>
         </AppRouterCacheProvider>
