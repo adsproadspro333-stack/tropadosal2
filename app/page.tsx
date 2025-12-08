@@ -123,7 +123,7 @@ export default function HomePage() {
           maxWidth="sm"
           sx={{
             px: { xs: 2, sm: 0 },
-            pt: { xs: 2, sm: 3 },
+            pt: 0, // 🔥 sem espaço entre header e card
             position: "relative",
             zIndex: 2,
           }}
@@ -132,6 +132,7 @@ export default function HomePage() {
           <Paper
             elevation={4}
             sx={{
+              mt: -1, // 🔥 puxa o card levemente pra cima, colando no header
               mb: 2,
               borderRadius: 2.5,
               bgcolor: "#FFFFFF",

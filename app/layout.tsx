@@ -72,19 +72,25 @@ window.fbq = window.fbq || function() {
           <ThemeProvider theme={theme}>
             <CssBaseline />
             <ToastProvider>
-              {/* Header */}
-              <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-                <div style={{ width: "100%", maxWidth: 480 }}>
+              {/* Header alinhado ao miolo (480px) mas sem criar espaço extra */}
+              <header style={{ width: "100%" }}>
+                <div
+                  style={{
+                    width: "100%",
+                    maxWidth: 480,
+                    margin: "0 auto",
+                  }}
+                >
                   <HeaderBar />
                 </div>
-              </div>
+              </header>
 
               {/* Conteúdo */}
               <main className="page-content" style={{ minHeight: "100dvh" }}>
                 {children}
               </main>
 
-              {/* ⬇️⬇️ NOVO RODAPÉ SIMPLES ⬇️⬇️ */}
+              {/* Rodapé simples com links legais */}
               <footer
                 style={{
                   width: "100%",
@@ -104,7 +110,6 @@ window.fbq = window.fbq || function() {
                     fontSize: 12,
                   }}
                 >
-                  {/* 🔗 CONDIÇÕES GERAIS */}
                   <a
                     href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/condicoes/Filantropia_1164_CG_-_PrAmios_do_Carlinhos_v.1164_2-1763555957360.pdf"
                     target="_blank"
@@ -118,7 +123,6 @@ window.fbq = window.fbq || function() {
                     Condições gerais
                   </a>
 
-                  {/* 🔗 REGULAMENTO */}
                   <a
                     href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/regulamentos/Regulamento_-_PrAmios_do_Carlinhos_v.1164_2-1763555972545.pdf"
                     target="_blank"
@@ -133,7 +137,6 @@ window.fbq = window.fbq || function() {
                   </a>
                 </div>
               </footer>
-              {/* ⬆️⬆️ FIM DO RODAPÉ ⬆️⬆️ */}
             </ToastProvider>
           </ThemeProvider>
         </AppRouterCacheProvider>

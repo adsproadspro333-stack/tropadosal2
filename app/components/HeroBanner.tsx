@@ -22,9 +22,9 @@ export default function HeroBanner() {
         alignItems: "center",
         bgcolor: "#F3F4F6",
         px: 1.5,
-        pt: 0.1,
-        pb: 1.5,
-        gap: 2,
+        pt: 0,       // 🔻 zerado
+        pb: 1.2,     // um pouco menos
+        gap: 1.5,    // um pouco menos
       }}
     >
       {/* Headline minimalista */}
@@ -33,7 +33,7 @@ export default function HeroBanner() {
           width: "100%",
           maxWidth: 420,
           textAlign: "center",
-          mb: 0.5,
+          mb: 0.25,   // 🔻 menos margem embaixo
         }}
       >
         <Typography
@@ -45,17 +45,17 @@ export default function HeroBanner() {
             color: "#111827",
           }}
         >
-          Você vai ganhar{" "}
+          É a sua chance para{" "}
           <Box component="span" sx={{ color: "#B91C1C" }}>
-            1 MILHÃO
+            MUDAR
           </Box>{" "}
-          no PIX
+          de vida
         </Typography>
 
         <Typography
           component="p"
           sx={{
-            mt: 0.5,
+            mt: 0.4,
             fontSize: "0.85rem",
             color: "#4B5563",
           }}

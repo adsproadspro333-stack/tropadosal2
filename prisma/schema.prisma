@@ -10,53 +10,43 @@ datasource db {
 model User {
   id        String   @id @default(uuid())
   cpf       String   @unique
-
-  // 🔹 Campos adicionais para melhorar match quality no Meta e identificação de usuário
-  email     String?  @unique        // email do usuário (hashado no CAPI)
-  phone     String?                  // telefone com DDI, ex: 5599999999999
-  firstName String?                  // primeiro nome
-  lastName  String?                  // sobrenome
-  city      String?                  // cidade (para user_data do Meta)
-  state     String?                  // estado (UF)
-  zip       String?                  // CEP
-  country   String?  @default("BR")  // país (BR por padrão)
-
   createdAt DateTime @default(now())
+  city      String?
+  country   String?  @default("BR")
+  email     String?  @unique
+  firstName String?
+  lastName  String?
+  phone     String?
+  state     String?
+  zip       String?
   orders    Order[]
 }
 
 model Order {
-  id        String   @id @default(uuid())
-  userId    String
-  amount    Float
-  quantity  Int      @default(0)          // 👈 NOVO CAMPO: qtd total de números
-  status    String   @default("pending")  // pending, paid, canceled
-  createdAt DateTime @default(now())
-
-  // 🔹 Campo para integração com Meta CAPI
-  // Usado como event_id para deduplicação entre browser e servidor
-  metaEventId String?                   // event_id usado no Meta (CAPI / Pixel)
-
+  id           String        @id @default(uuid())
+  userId       String
+  amount       Float
+  status       String        @default("pending")
+  createdAt    DateTime      @default(now())
+  quantity     Int           @default(0)
+  metaEventId  String?
   user         User          @relation(fields: [userId], references: [id])
-  transactions Transaction[]
   tickets      Ticket[]
+  transactions Transaction[]
 
   @@index([userId])
   @@index([status])
 }
 
 model Transaction {
-  id        String   @id @default(uuid())
-  orderId   String
-  value     Float
-  status    String   @default("pending") // pending, paid, failed
-  gatewayId String?                      // ID retornado pelo gateway
-
-  // 👇 mapeando exatamente para a coluna física "pixcopiacola"
-  pixCopiaCola String? @map("pixcopiacola") // código PIX copia e cola
-
-  createdAt DateTime @default(now())
-  order     Order    @relation(fields: [orderId], references: [id])
+  id           String   @id @default(uuid())
+  orderId      String
+  value        Float
+  status       String   @default("pending")
+  gatewayId    String?
+  createdAt    DateTime @default(now())
+  pixCopiaCola String?  @map("pixcopiacola")
+  order        Order    @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
   @@index([status])
