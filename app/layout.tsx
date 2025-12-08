@@ -26,9 +26,7 @@ const FB_PIXEL_ID = "2539052283140863"
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="pt-BR">
       <head>
@@ -50,7 +48,6 @@ s.parentNode.insertBefore(t,s)}(window, document,'script',
 fbq('init', '${FB_PIXEL_ID}');
 fbq('track', 'PageView');
 
-// Garante compatibilidade com eventID dinâmico vindo do backend
 window.fbq = window.fbq || function() {
   (window.fbq.q = window.fbq.q || []).push(arguments);
 };
@@ -75,10 +72,68 @@ window.fbq = window.fbq || function() {
           <ThemeProvider theme={theme}>
             <CssBaseline />
             <ToastProvider>
-              <HeaderBar />
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
+                <div style={{ width: "100%", maxWidth: 480 }}>
+                  <HeaderBar />
+                </div>
+              </div>
+
+              {/* Conteúdo */}
               <main className="page-content" style={{ minHeight: "100dvh" }}>
                 {children}
               </main>
+
+              {/* ⬇️⬇️ NOVO RODAPÉ SIMPLES ⬇️⬇️ */}
+              <footer
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "center",
+                  marginTop: 40,
+                  paddingBottom: 40,
+                }}
+              >
+                <div
+                  style={{
+                    width: "100%",
+                    maxWidth: 480,
+                    display: "flex",
+                    justifyContent: "center",
+                    gap: 32,
+                    fontSize: 12,
+                  }}
+                >
+                  {/* 🔗 CONDIÇÕES GERAIS */}
+                  <a
+                    href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/condicoes/Filantropia_1164_CG_-_PrAmios_do_Carlinhos_v.1164_2-1763555957360.pdf"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: "#4B5563",
+                      textDecoration: "underline",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Condições gerais
+                  </a>
+
+                  {/* 🔗 REGULAMENTO */}
+                  <a
+                    href="https://fpp-assets.playservicos.com.br/bpp/PREMIOSDOMAIA/regulamentos/Regulamento_-_PrAmios_do_Carlinhos_v.1164_2-1763555972545.pdf"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: "#4B5563",
+                      textDecoration: "underline",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Regulamento
+                  </a>
+                </div>
+              </footer>
+              {/* ⬆️⬆️ FIM DO RODAPÉ ⬆️⬆️ */}
             </ToastProvider>
           </ThemeProvider>
         </AppRouterCacheProvider>

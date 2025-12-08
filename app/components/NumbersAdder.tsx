@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 
 // 🎨 CORES PRINCIPAIS
 const PRIMARY_RED = "#8B0000"   // vermelho escuro dos combos
-const LIGHT_RED = "#FDE8E8"     // vermelho claro de hover
+const LIGHT_RED = "#FEE2E2"     // vermelho claro do fundo selecionado
 const BADGE_GREEN = "#16A34A"   // verde do selo "Mais vendido"
 
 // 🎯 COMBOS
@@ -42,7 +42,7 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo selecionado no momento (começa no +200 pra puxar ticket médio)
+  // combo selecionado no momento (começa no +100 pra destravar mais rápido)
   const [selectedComboId, setSelectedComboId] =
     useState<string | null>("combo-100")
   const [highlight, setHighlight] = useState(true)
@@ -52,7 +52,7 @@ export default function NumbersAdder() {
     return () => clearTimeout(t)
   }, [])
 
-  const handleAdd = (combo: (typeof COMBOS)[0]) => {
+  const handleAdd = (combo: (typeof COMBOS)[number]) => {
     addComboToCart(combo.quantity, combo.priceCents)
     setSelectedComboId(combo.id)
 
@@ -116,7 +116,7 @@ export default function NumbersAdder() {
             ["--primary-red" as any]: PRIMARY_RED,
             ["--light-red" as any]: LIGHT_RED,
             boxShadow: isSelected
-              ? "0 0 0 1px rgba(139,0,0,0.7), 0 10px 22px rgba(139,0,0,0.45)"
+              ? "0 8px 18px rgba(139,0,0,0.25)"
               : "0 2px 6px rgba(15,23,42,0.12)",
             transform: isSelected
               ? "translateY(-1px) scale(1.02)"
@@ -139,7 +139,7 @@ export default function NumbersAdder() {
                 "hover:shadow-md hover:scale-[1.02] active:scale-95",
                 "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#FEE2E2]",
                 isSelected
-                  ? "bg-[var(--primary-red)] border-[var(--primary-red)] text-white hover:brightness-90"
+                  ? "bg-[var(--light-red)] border-[var(--primary-red)] text-[#7F1D1D] hover:bg-[var(--light-red)]"
                   : "bg-white border-[var(--primary-red)] text-[var(--primary-red)] hover:bg-[var(--light-red)]",
                 highlight && isFeatured && "motion-safe:animate-soft-pulse",
               )}
@@ -166,8 +166,8 @@ export default function NumbersAdder() {
 
                 <div
                   className={cn(
-                    "mt-1 text-[10px] sm:text[11px]",
-                    isSelected ? "text-white/90" : "text-slate-600",
+                    "mt-1 text-[10px] sm:text-[11px]",
+                    isSelected ? "text-[#7F1D1D]" : "text-slate-600",
                   )}
                 >
                   {benefitText}
@@ -178,16 +178,12 @@ export default function NumbersAdder() {
                   className={cn(
                     "mt-2 text-[11px] sm:text-xs flex items-center justify-center gap-1",
                     isSelected
-                      ? "text-white font-semibold"
+                      ? "text-[#7F1D1D] font-semibold"
                       : "text-[var(--primary-red)] underline underline-offset-2 decoration-[var(--primary-red)]/50",
                   )}
                 >
                   {isSelected && (
-                    <span
-                      className={cn(
-                        "inline-flex items-center justify-center leading-none",
-                      )}
-                    >
+                    <span className="inline-flex items-center justify-center leading-none">
                       ✅
                     </span>
                   )}

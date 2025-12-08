@@ -80,6 +80,7 @@ async function handleRequest(cpfRaw: string) {
             status: t.status,
             value: t.value,
             gatewayId: t.gatewayId,
+            pixCopiaCola: t.pixCopiaCola, // 👈 agora vindo pra frente
           })) ?? [],
       }
     })

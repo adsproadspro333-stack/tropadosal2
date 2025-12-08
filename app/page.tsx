@@ -14,18 +14,20 @@ import { useRouter } from "next/navigation"
 
 import HeroBanner from "./components/HeroBanner"
 import SalesProgress from "./components/SalesProgress"
-import QuantitySelector from "./components/QuantitySelector"
 import NumbersAdder from "./components/NumbersAdder"
 import WinnersList from "./components/WinnersList"
 import SocialProofNotifications from "./components/SocialProofNotifications"
 import FooterLegal from "./components/FooterLegal"
-import ActionPrizesCard from "./components/ActionPrizesCard" // 👈 NOVO CARD
+import ActionPrizesCard from "./components/ActionPrizesCard"
 
 import { trackViewContent } from "@/lib/fbq"
 import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
+  // 🛒 Carrinho visível na Home
+  const { qty, totalInCents, handleChangeQuantity, clearCart } = useCartStore()
+
   // 🔹 1) Evento de ViewContent
   useEffect(() => {
     const eventId =
@@ -60,7 +62,7 @@ export default function HomePage() {
     if (!qtyParam || !priceParam) return
 
     const qtyNum = Number(qtyParam)
-    const priceNum = Number(priceParam) // v vem como "14.90"
+    const priceNum = Number(priceParam)
 
     if (
       !Number.isFinite(qtyNum) ||
@@ -73,7 +75,6 @@ export default function HomePage() {
 
     const priceCents = Math.round(priceNum * 100)
 
-    // monta um pedido só com o pacote de reforço
     useCartStore.getState().prepareUpsellOrder(qtyNum, priceCents)
 
     console.log(
@@ -85,297 +86,431 @@ export default function HomePage() {
     )
   }, [])
 
+  // handlers pro seletor inline (dentro da Home)
+  const incInline = () => {
+    handleChangeQuantity(qty + 1)
+  }
+
+  const decInline = () => {
+    if (qty <= 0) return
+    handleChangeQuantity(qty - 1)
+  }
+
+  const resetInline = () => {
+    clearCart() // 🔁 Zera tudo (quantidade + valores)
+  }
+
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        bgcolor: "#F2F2F2",
-        pb: 18, // espaço pro CTA fixo
+        bgcolor: "#FFFFFF",
+        display: "flex",
+        justifyContent: "center",
       }}
     >
-      {/* Banner topo (flyer) */}
+      {/* 🔹 Miolo central: tudo que importa fica dentro deste box */}
       <Box
         sx={{
-          position: "relative",
-          pb: { xs: 7, sm: 4 }, // espaço pra encaixar combos
+          width: "100%",
+          maxWidth: 480, // controla o “tamanho do site” (desktop e mobile)
+          mx: "auto",
+          // 🔥 espaço extra pra não ser tampado pelo CTA fixo
+          pb: { xs: 11, sm: 12 },
         }}
       >
-        <HeroBanner />
-      </Box>
-
-      {/* Conteúdo central estilo app */}
-      <Container
-        maxWidth="sm"
-        sx={{
-          px: { xs: 2, sm: 0 },
-          pt: { xs: 0, sm: 2 },
-          mt: { xs: -8, sm: 0 }, // puxa combos pra cima no mobile
-          position: "relative",
-          zIndex: 2,
-        }}
-      >
-        {/* 1) COMBOS */}
-        <Paper
-          elevation={4}
+        <Container
+          maxWidth="sm"
           sx={{
-            mb: 2,
-            p: 1.8,
-            borderRadius: 2.5,
-            bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
-            boxShadow: "0 18px 40px rgba(15,23,42,0.25)",
+            px: { xs: 2, sm: 0 },
+            pt: { xs: 2, sm: 3 },
+            position: "relative",
+            zIndex: 2,
           }}
         >
-          <Stack
-            direction="row"
-            justifyContent="space-between"
-            alignItems="center"
-            mb={1}
+          {/* 🔶 CARD ÚNICO: HERO + COMBOS + AJUSTE + ZERAR */}
+          <Paper
+            elevation={4}
+            sx={{
+              mb: 2,
+              borderRadius: 2.5,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+              boxShadow: "0 18px 40px rgba(15,23,42,0.25)",
+              overflow: "hidden",
+            }}
           >
-            <Box>
-              <Typography
-                variant="subtitle1"
-                sx={{
-                  fontWeight: 700,
-                  fontSize: "0.98rem",
-                  color: "#111827",
-                }}
-              >
-                Combos de números
-              </Typography>
-              <Typography
-                variant="body2"
-                sx={{
-                  fontSize: "0.8rem",
-                  color: "#6B7280",
-                }}
-              >
-                Selecione um combo pronto para acelerar suas chances.
-              </Typography>
+            {/* Hero/banner dentro do mesmo card */}
+            <Box
+              sx={{
+                bgcolor: "#FFFFFF",
+              }}
+            >
+              <HeroBanner />
             </Box>
-          </Stack>
 
-          <NumbersAdder />
-        </Paper>
+            {/* Conteúdo abaixo do banner (combos + seletor) */}
+            <Box sx={{ p: 1.8, pt: 1.4 }}>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                mb={1}
+              >
+                <Box>
+                  <Typography
+                    variant="subtitle1"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: "0.98rem",
+                      color: "#111827",
+                    }}
+                  >
+                    Combos de números
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      fontSize: "0.8rem",
+                      color: "#6B7280",
+                    }}
+                  >
+                    Selecione um combo pronto para acelerar suas chances.
+                  </Typography>
+                </Box>
+              </Stack>
 
-        {/* 1.5) PRÊMIOS DA AÇÃO – novo card logo abaixo dos combos */}
-        <ActionPrizesCard />
+              {/* grid de combos */}
+              <NumbersAdder />
 
-        {/* 2) Quantidade personalizada */}
-        <Paper
-          elevation={3}
-          sx={{
-            mb: 2,
-            p: 1.8,
-            borderRadius: 2,
-            bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
-          }}
-        >
-          <Typography
-            variant="subtitle1"
-            sx={{
-              fontWeight: 700,
-              mb: 0.6,
-              fontSize: "0.98rem",
-              color: "#111827",
-            }}
-          >
-            Quantidade personalizada
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{
-              mb: 1.4,
-              fontSize: "0.8rem",
-              color: "#6B7280",
-            }}
-          >
-            Ajuste manualmente quantos números você quer garantir nesta edição.
-          </Typography>
+              <Divider sx={{ my: 1.8 }} />
 
-          <Divider sx={{ mb: 1.4 }} />
-
-          <QuantitySelector />
-        </Paper>
-
-        {/* 3) Como funciona */}
-        <Paper
-          elevation={3}
-          sx={{
-            mb: 2,
-            p: 1.8,
-            borderRadius: 2,
-            bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
-          }}
-        >
-          <Typography
-            variant="subtitle1"
-            sx={{
-              fontWeight: 700,
-              mb: 0.6,
-              fontSize: "0.98rem",
-              color: "#111827",
-            }}
-          >
-            Como funciona a ação
-          </Typography>
-
-          <Typography
-            variant="body2"
-            sx={{
-              mb: 1.2,
-              fontSize: "0.8rem",
-              color: "#6B7280",
-            }}
-          >
-            É simples e rápido para participar. Veja os passos:
-          </Typography>
-
-          <Stack spacing={1.1} sx={{ fontSize: "0.8rem", color: "#374151" }}>
-            <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Box
-                sx={{
-                  mt: "3px",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: "#16A34A",
-                }}
-              />
+              {/* seletor + total + botão Zerar */}
               <Box>
-                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
-                  1. Escolha a quantidade de números
+                <Typography
+                  variant="subtitle2"
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: "0.9rem",
+                    color: "#111827",
+                    mb: 0.4,
+                  }}
+                >
+                  Ajustar quantidade
                 </Typography>
-                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
-                  Use os combos prontos ou personalize a quantidade ideal pra
-                  você.
+                <Typography
+                  variant="body2"
+                  sx={{
+                    fontSize: "0.78rem",
+                    color: "#6B7280",
+                    mb: 1,
+                  }}
+                >
+                  Use o seletor abaixo para refinar a quantidade total de
+                  números desta edição.
                 </Typography>
+
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{ mb: 1.2 }}
+                >
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                    }}
+                  >
+                    <Button
+                      onClick={decInline}
+                      variant="outlined"
+                      size="small"
+                      sx={{
+                        minWidth: 36,
+                        borderRadius: 999,
+                        px: 0,
+                        fontWeight: 700,
+                        borderColor: "#D1D5DB",
+                        color: "#4B5563",
+                      }}
+                    >
+                      −
+                    </Button>
+
+                    <Box
+                      sx={{
+                        px: 2,
+                        py: 0.7,
+                        borderRadius: 999,
+                        border: "1px solid #D1D5DB",
+                        minWidth: 64,
+                        textAlign: "center",
+                        bgcolor: "#F9FAFB",
+                      }}
+                    >
+                      <Typography
+                        sx={{
+                          fontWeight: 600,
+                          fontSize: "0.9rem",
+                          color: "#111827",
+                        }}
+                      >
+                        {qty}
+                      </Typography>
+                    </Box>
+
+                    <Button
+                      onClick={incInline}
+                      variant="outlined"
+                      size="small"
+                      sx={{
+                        minWidth: 36,
+                        borderRadius: 999,
+                        px: 0,
+                        fontWeight: 700,
+                        borderColor: "#D1D5DB",
+                        color: "#4B5563",
+                      }}
+                    >
+                      +
+                    </Button>
+                  </Box>
+
+                  <Box sx={{ textAlign: "right" }}>
+                    <Typography
+                      variant="caption"
+                      sx={{ fontSize: "0.78rem", color: "#6B7280" }}
+                    >
+                      {qty} números selecionados
+                    </Typography>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: "0.96rem",
+                        color: "#111827",
+                      }}
+                    >
+                      {formatBRL(totalInCents / 100)}
+                    </Typography>
+                  </Box>
+                </Stack>
+
+                {/* 🔄 Botão ZERAR */}
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  size="small"
+                  onClick={resetInline}
+                  sx={{
+                    mt: 0.5,
+                    borderRadius: 999,
+                    fontWeight: 600,
+                    fontSize: "0.78rem",
+                    borderColor: "#E5E7EB",
+                    color: "#6B7280",
+                  }}
+                >
+                  Zerar
+                </Button>
               </Box>
+            </Box>
+          </Paper>
+
+          {/* 1.5) PRÊMIOS DA AÇÃO */}
+          <Paper
+            elevation={3}
+            sx={{
+              mb: 2,
+              p: 1.8,
+              borderRadius: 2,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+            }}
+          >
+            <ActionPrizesCard />
+          </Paper>
+
+          {/* 2) Como funciona a ação */}
+          <Paper
+            elevation={3}
+            sx={{
+              mb: 2,
+              p: 1.8,
+              borderRadius: 2,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 700,
+                mb: 0.6,
+                fontSize: "0.98rem",
+                color: "#111827",
+              }}
+            >
+              Como funciona a ação
+            </Typography>
+
+            <Typography
+              variant="body2"
+              sx={{
+                mb: 1.2,
+                fontSize: "0.8rem",
+                color: "#6B7280",
+              }}
+            >
+              É simples e rápido para participar. Veja os passos:
+            </Typography>
+
+            <Stack spacing={1.1} sx={{ fontSize: "0.8rem", color: "#374151" }}>
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <Box
+                  sx={{
+                    mt: "3px",
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    bgcolor: "#16A34A",
+                  }}
+                />
+                <Box>
+                  <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                    1. Escolha a quantidade de números
+                  </Typography>
+                  <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                    Use os combos prontos ou ajuste a quantidade ideal pra você.
+                  </Typography>
+                </Box>
+              </Stack>
+
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <Box
+                  sx={{
+                    mt: "3px",
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    bgcolor: "#16A34A",
+                  }}
+                />
+                <Box>
+                  <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                    2. Confirme e pague via Pix
+                  </Typography>
+                  <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                    O pagamento é instantâneo e 100% seguro, direto no seu
+                    banco.
+                  </Typography>
+                </Box>
+              </Stack>
+
+              <Stack direction="row" spacing={1} alignItems="flex-start">
+                <Box
+                  sx={{
+                    mt: "3px",
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    bgcolor: "#16A34A",
+                  }}
+                />
+                <Box>
+                  <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
+                    3. Receba os números e acompanhe o sorteio
+                  </Typography>
+                  <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
+                    Seus números são enviados na hora e você acompanha tudo
+                    pelos canais oficiais.
+                  </Typography>
+                </Box>
+              </Stack>
             </Stack>
+          </Paper>
 
-            <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Box
-                sx={{
-                  mt: "3px",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: "#16A34A",
-                }}
-              />
-              <Box>
-                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
-                  2. Confirme e pague via Pix
-                </Typography>
-                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
-                  O pagamento é instantâneo e 100% seguro, direto no seu banco.
-                </Typography>
-              </Box>
-            </Stack>
-
-            <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Box
-                sx={{
-                  mt: "3px",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: "#16A34A",
-                }}
-              />
-              <Box>
-                <Typography sx={{ fontSize: "0.8rem", fontWeight: 600 }}>
-                  3. Receba os números e acompanhe o sorteio
-                </Typography>
-                <Typography sx={{ fontSize: "0.78rem", color: "#6B7280" }}>
-                  Seus números são enviados na hora e você acompanha tudo pelos
-                  canais oficiais.
-                </Typography>
-              </Box>
-            </Stack>
-          </Stack>
-        </Paper>
-
-        {/* 4) Ganhadores recentes */}
-        <Paper
-          elevation={3}
-          sx={{
-            mb: 2,
-            p: 1.8,
-            borderRadius: 2,
-            bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
-          }}
-        >
-          <Typography
-            variant="subtitle1"
+          {/* 3) Ganhadores recentes */}
+          <Paper
+            elevation={3}
             sx={{
-              fontWeight: 700,
-              mb: 0.6,
-              fontSize: "0.98rem",
-              color: "#111827",
+              mb: 2,
+              p: 1.8,
+              borderRadius: 2,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
             }}
           >
-            Ganhadores recentes
-          </Typography>
-          <Typography
-            variant="body2"
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 700,
+                mb: 0.6,
+                fontSize: "0.98rem",
+                color: "#111827",
+              }}
+            >
+              Ganhadores recentes
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{
+                mb: 1.4,
+                fontSize: "0.8rem",
+                color: "#6B7280",
+              }}
+            >
+              Confira alguns dos últimos prêmios entregues pela POZE PREMIOS.
+            </Typography>
+
+            <WinnersList initialCount={4} />
+          </Paper>
+
+          {/* 4) Progresso de vendas */}
+          <Paper
+            elevation={3}
             sx={{
-              mb: 1.4,
-              fontSize: "0.8rem",
-              color: "#6B7280",
+              mb: 3,
+              p: 1.8,
+              borderRadius: 2,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
             }}
           >
-            Confira alguns dos últimos prêmios entregues pela POZE PRÊMIOS.
-          </Typography>
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 700,
+                mb: 0.8,
+                fontSize: "0.98rem",
+                color: "#111827",
+              }}
+            >
+              Progresso de vendas
+            </Typography>
 
-          <WinnersList initialCount={4} />
-        </Paper>
+            <SalesProgress percent={76.3} />
 
-        {/* 5) Progresso de vendas */}
-        <Paper
-          elevation={3}
-          sx={{
-            mb: 3,
-            p: 1.8,
-            borderRadius: 2,
-            bgcolor: "#FFFFFF",
-            border: "1px solid #E5E7EB",
-          }}
-        >
-          <Typography
-            variant="subtitle1"
-            sx={{
-              fontWeight: 700,
-              mb: 0.8,
-              fontSize: "0.98rem",
-              color: "#111827",
-            }}
-          >
-            Progresso de vendas
-          </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                mt: 1,
+                display: "block",
+                fontSize: "0.75rem",
+                color: "#6B7280",
+              }}
+            >
+              Restam apenas <strong>1,9% dos títulos disponíveis</strong>.
+              Garanta sua participação enquanto ainda há números liberados.
+            </Typography>
+          </Paper>
 
-          <SalesProgress percent={76.3} />
-
-          <Typography
-            variant="caption"
-            sx={{
-              mt: 1,
-              display: "block",
-              fontSize: "0.75rem",
-              color: "#6B7280",
-            }}
-          >
-            Restam apenas <strong>1,9% dos títulos disponíveis</strong>. Garanta
-            sua participação enquanto ainda há números liberados.
-          </Typography>
-        </Paper>
-
-        {/* 6) Texto legal SUSEP */}
-        <FooterLegal />
-      </Container>
+          {/* 5) Texto legal SUSEP */}
+          <FooterLegal />
+        </Container>
+      </Box>
 
       {/* Notificações flutuantes */}
       <SocialProofNotifications />
@@ -424,134 +559,143 @@ function StickyCTA() {
       }}
     >
       <Container maxWidth="sm" sx={{ px: { xs: 2, sm: 0 } }}>
-        <Stack spacing={1}>
-          {/* linha com quantidade / valor / seletor */}
-          <Stack
-            direction="row"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <Box>
-              <Typography
-                variant="caption"
-                sx={{ fontSize: "0.78rem", color: "#6B7280" }}
-              >
-                {qty} Números
-              </Typography>
-              <Typography
-                variant="subtitle1"
-                sx={{
-                  fontWeight: 700,
-                  fontSize: "1rem",
-                  color: "#111827",
-                }}
-              >
-                {formatBRL(totalInCents / 100)}
-              </Typography>
-            </Box>
-
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 0.5,
-              }}
+        {/* 🔹 Garante que o CTA fica alinhado com o mesmo miolo de 480px */}
+        <Box
+          sx={{
+            width: "100%",
+            maxWidth: 480,
+            mx: "auto",
+          }}
+        >
+          <Stack spacing={1}>
+            {/* linha com quantidade / valor / seletor */}
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
             >
-              <Button
-                onClick={dec}
-                variant="outlined"
-                size="small"
-                sx={{
-                  minWidth: 36,
-                  borderRadius: 999,
-                  px: 0,
-                  fontWeight: 700,
-                  borderColor: "#D1D5DB",
-                  color: "#4B5563",
-                }}
-              >
-                −
-              </Button>
-
-              <Box
-                sx={{
-                  px: 2,
-                  py: 0.7,
-                  borderRadius: 999,
-                  border: "1px solid #D1D5DB", // ✅ arrumado
-                  minWidth: 64,
-                  textAlign: "center",
-                  bgcolor: "#F9FAFB",
-                }}
-              >
+              <Box>
                 <Typography
+                  variant="caption"
+                  sx={{ fontSize: "0.78rem", color: "#6B7280" }}
+                >
+                  {qty} Números
+                </Typography>
+                <Typography
+                  variant="subtitle1"
                   sx={{
-                    fontWeight: 600,
-                    fontSize: "0.9rem",
+                    fontWeight: 700,
+                    fontSize: "1rem",
                     color: "#111827",
                   }}
                 >
-                  {qty}
+                  {formatBRL(totalInCents / 100)}
                 </Typography>
               </Box>
 
-              <Button
-                onClick={inc}
-                variant="outlined"
-                size="small"
+              <Box
                 sx={{
-                  minWidth: 36,
-                  borderRadius: 999,
-                  px: 0,
-                  fontWeight: 700,
-                  borderColor: "#D1D5DB",
-                  color: "#4B5563",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.5,
                 }}
               >
-                +
-              </Button>
-            </Box>
-          </Stack>
+                <Button
+                  onClick={dec}
+                  variant="outlined"
+                  size="small"
+                  sx={{
+                    minWidth: 36,
+                    borderRadius: 999,
+                    px: 0,
+                    fontWeight: 700,
+                    borderColor: "#D1D5DB",
+                    color: "#4B5563",
+                  }}
+                >
+                  −
+                </Button>
 
-          {/* botão principal */}
-          <Button
-            onClick={handleClick}
-            variant="contained"
-            fullWidth
-            disabled={disabled}
-            sx={{
-              fontWeight: 800,
-              borderRadius: 999,
-              py: 1.1,
-              fontSize: "0.98rem",
-              textTransform: "none",
-              letterSpacing: 0.3,
-              bgcolor: disabled ? "#9CA3AF" : "#16A34A",
-              color: "#ffffff",
-              boxShadow: disabled
-                ? "0 0 0 rgba(0,0,0,0)"
-                : "0px 8px 18px rgba(0,0,0,0.18)",
-              transform: "translateY(0)",
-              transition:
-                "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease",
-              "&:hover": {
-                bgcolor: disabled ? "#9CA3AF" : "#15803D",
-                transform: disabled ? "none" : "translateY(-2px)",
+                <Box
+                  sx={{
+                    px: 2,
+                    py: 0.7,
+                    borderRadius: 999,
+                    border: "1px solid #D1D5DB",
+                    minWidth: 64,
+                    textAlign: "center",
+                    bgcolor: "#F9FAFB",
+                  }}
+                >
+                  <Typography
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.9rem",
+                      color: "#111827",
+                    }}
+                  >
+                    {qty}
+                  </Typography>
+                </Box>
+
+                <Button
+                  onClick={inc}
+                  variant="outlined"
+                  size="small"
+                  sx={{
+                    minWidth: 36,
+                    borderRadius: 999,
+                    px: 0,
+                    fontWeight: 700,
+                    borderColor: "#D1D5DB",
+                    color: "#4B5563",
+                  }}
+                >
+                  +
+                </Button>
+              </Box>
+            </Stack>
+
+            {/* botão principal */}
+            <Button
+              onClick={handleClick}
+              variant="contained"
+              fullWidth
+              disabled={disabled}
+              sx={{
+                fontWeight: 800,
+                borderRadius: 999,
+                py: 1.1,
+                fontSize: "0.98rem",
+                textTransform: "none",
+                letterSpacing: 0.3,
+                bgcolor: disabled ? "#9CA3AF" : "#16A34A",
+                color: "#ffffff",
                 boxShadow: disabled
                   ? "0 0 0 rgba(0,0,0,0)"
-                  : "0px 12px 26px rgba(0,0,0,0.25)",
-              },
-              "&:active": {
-                transform: disabled ? "none" : "scale(0.97)",
-                boxShadow: disabled
-                  ? "0 0 0 rgba(0,0,0,0)"
-                  : "0px 6px 14px rgba(0,0,0,0.2)",
-              },
-            }}
-          >
-            {disabled ? "Selecione pelo menos 100 números" : "Concorrer"}
-          </Button>
-        </Stack>
+                  : "0px 8px 18px rgba(0,0,0,0.18)",
+                transform: "translateY(0)",
+                transition:
+                  "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease",
+                "&:hover": {
+                  bgcolor: disabled ? "#9CA3AF" : "#15803D",
+                  transform: disabled ? "none" : "translateY(-2px)",
+                  boxShadow: disabled
+                    ? "0 0 0 rgba(0,0,0,0)"
+                    : "0px 12px 26px rgba(0,0,0,0.25)",
+                },
+                "&:active": {
+                  transform: disabled ? "none" : "scale(0.97)",
+                  boxShadow: disabled
+                    ? "0 0 0 rgba(0,0,0,0)"
+                    : "0px 6px 14px rgba(0,0,0,0.2)",
+                },
+              }}
+            >
+              {disabled ? "Selecione pelo menos 100 números" : "Concorrer"}
+            </Button>
+          </Stack>
+        </Box>
       </Container>
     </Box>
   )

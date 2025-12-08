@@ -51,6 +51,10 @@ model Transaction {
   value     Float
   status    String   @default("pending") // pending, paid, failed
   gatewayId String?                      // ID retornado pelo gateway
+
+  // 👇 mapeando exatamente para a coluna física "pixcopiacola"
+  pixCopiaCola String? @map("pixcopiacola") // código PIX copia e cola
+
   createdAt DateTime @default(now())
   order     Order    @relation(fields: [orderId], references: [id])
 
