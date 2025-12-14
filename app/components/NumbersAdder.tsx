@@ -7,10 +7,8 @@ import { useToast } from "./ui/Toast"
 import { cn } from "@/lib/utils"
 
 // 🎯 COMBOS
-// AGORA A LÓGICA REAL É 3, 5, 10, 15
-// Mantendo os mesmos preços:
 // 3  →  9,90
-// 5  → 19,90
+// 5  → 19,90  (mais vendido)
 // 10 → 49,90
 // 15 → 99,90
 const COMBOS = [
@@ -39,8 +37,7 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo “pré-destaque” só visual (não adiciona nada automaticamente)
-  // agora o mais vendido é o de 5 números
+  // combo destaque apenas visual
   const [selectedComboId, setSelectedComboId] =
     useState<string | null>("combo-5")
   const [highlight, setHighlight] = useState(true)
@@ -51,7 +48,6 @@ export default function NumbersAdder() {
   }, [])
 
   const handleAdd = (combo: (typeof COMBOS)[number]) => {
-    // AGORA SOMA 3 / 5 / 10 / 15 NO CARRINHO
     addComboToCart(combo.quantity, combo.priceCents)
     setSelectedComboId(combo.id)
 
@@ -91,19 +87,17 @@ export default function NumbersAdder() {
 
   return (
     <div className="w-full">
-      {/* bloco dos combos – grid 2x2, igual referência */}
       <div className="w-full grid grid-cols-2 gap-x-5 gap-y-2.5">
         {COMBOS.map((combo) => {
-          // “Mais vendido” fica no segundo card (5 números), igual referência
           const isFeatured = combo.id === "combo-5"
           const isSelected = selectedComboId === combo.id
 
           const dynamicStyle: CSSProperties = {
             boxShadow: isSelected
-              ? "0 8px 18px rgba(15,23,42,0.25)"
+              ? "0 10px 22px rgba(220,38,38,0.28)"
               : "0 2px 6px rgba(15,23,42,0.12)",
             transform: isSelected
-              ? "translateY(-1px) scale(1.01)"
+              ? "translateY(-1px) scale(1.02)"
               : "translateY(0) scale(1)",
             transition: "transform 0.18s ease, box-shadow 0.18s ease",
           }
@@ -119,30 +113,27 @@ export default function NumbersAdder() {
               style={dynamicStyle}
               className={cn(
                 "relative w-full select-none cursor-pointer",
-                "flex flex-col border-[2px] px-3 py-3 rounded-[10px]",
-                "transition-colors duration-150 active:bg-[#c9c9c9]",
+                "flex flex-col border-[2px] px-3 py-3 rounded-[12px]",
+                "transition-colors duration-150 active:scale-[0.97]",
                 isSelected
-                  ? "border-[#2563EB] bg-[#DBEAFE]"
+                  ? "border-[#DC2626] bg-[#FEF2F2]"
                   : "border-[#E5E7EB] bg-white hover:bg-slate-50",
                 highlight && isFeatured && "motion-safe:animate-soft-pulse",
               )}
             >
-              {/* Badge “Mais vendido” sempre visível no combo destaque */}
+              {/* Badge Mais vendido */}
               {isFeatured && (
-                <span className="flex badgeMaisVendido items-center gap-[2px] text-[11px] h-5 rounded-full px-2 w-max absolute -top-2 left-2 bg-[#2563EB] text-white font-semibold shadow">
-                  <span>Mais vendido</span>
+                <span className="absolute -top-2 left-2 flex items-center text-[11px] h-5 rounded-full px-2 bg-[#DC2626] text-white font-semibold shadow">
+                  Mais vendido
                 </span>
               )}
 
-              {/* Título + preço, agora com 3 / 5 / 10 / 15 Números */}
               <p className="font-semibold text-base text-gray-900">
                 {combo.quantity} Números
               </p>
 
               <p className="mt-0.5 text-[13px] text-gray-700">
-                {" "}
-                Por:{" "}
-                <strong>{formatBRL(combo.priceCents / 100)}</strong>
+                Por: <strong>{formatBRL(combo.priceCents / 100)}</strong>
               </p>
             </button>
           )

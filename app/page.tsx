@@ -46,9 +46,9 @@ export default function HomePage() {
 
     try {
       trackViewContent({
-        content_name: "CHRYS Prêmios - Rifa Principal",
+        content_name: "FAVELA Prêmios - Rifa Principal",
         content_category: "rifa",
-        content_ids: ["rifa_chrys_principal"],
+        content_ids: ["rifa_favela_principal"],
         content_type: "product_group",
         currency: "BRL",
         value: 0.1,
@@ -531,7 +531,7 @@ export default function HomePage() {
                 color: "#6B7280",
               }}
             >
-              Confira alguns dos últimos prêmios entregues pelo Carlinhos Maia.
+              Confira alguns dos últimos prêmios entregues pelo Mc Poze e o Mc Oruam.
             </Typography>
 
             <WinnersList initialCount={4} />

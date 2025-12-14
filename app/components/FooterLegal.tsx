@@ -55,7 +55,7 @@ export default function FooterLegal() {
               fontWeight: 500,
             }}
           >
-            Condições gerais
+            
           </a>
 
           <a
@@ -70,7 +70,7 @@ export default function FooterLegal() {
               fontWeight: 500,
             }}
           >
-            Regulamento
+            
           </a>
         </Box>
       </Container>

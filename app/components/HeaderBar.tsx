@@ -14,8 +14,8 @@ export default function HeaderBar() {
         top: 0,
         zIndex: 50,
         width: "100%",
-        backgroundColor: "#F3F4F6", // acompanha o fundo da página
-        boxShadow: "0 1px 2px rgba(15,23,42,0.08)", // sombra leve
+        backgroundColor: "#0B0B0B", // 🔥 header preta premium
+        boxShadow: "0 2px 8px rgba(0,0,0,0.55)", // separação mais forte
       }}
     >
       <div
@@ -26,7 +26,7 @@ export default function HeaderBar() {
           justifyContent: "center",
         }}
       >
-        {/* centraliza o conteúdo no mesmo miolo de 480px */}
+        {/* miolo 480px */}
         <div
           style={{
             width: "100%",
@@ -38,7 +38,7 @@ export default function HeaderBar() {
             gap: 8,
           }}
         >
-          {/* LOGO À ESQUERDA */}
+          {/* LOGO */}
           <Link
             href="/"
             aria-label="Página inicial"
@@ -51,8 +51,8 @@ export default function HeaderBar() {
           >
             {imgOk ? (
               <Image
-                src="/logo-header.png"
-                alt="CHRYS PRÊMIOS"
+                src="/logo-header.jpg"
+                alt="FAVELA PRÊMIOS"
                 width={360}
                 height={120}
                 priority
@@ -61,6 +61,7 @@ export default function HeaderBar() {
                   height: 48,
                   width: "auto",
                   objectFit: "contain",
+                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.6))",
                 }}
                 onError={() => setImgOk(false)}
               />
@@ -68,11 +69,11 @@ export default function HeaderBar() {
               <strong
                 style={{
                   fontSize: 18,
-                  color: "#0F172A",
+                  color: "#FFFFFF",
                   whiteSpace: "nowrap",
                 }}
               >
-                CHRYS PRÊMIOS
+                FAVELA PRÊMIOS
               </strong>
             )}
           </Link>
@@ -89,15 +90,22 @@ export default function HeaderBar() {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                border: "2px solid #d4af37",
-                color: "#b88700",
-                background: "transparent",
+                border: "2px solid #D4AF37",
+                color: "#F5D76E",
+                background: "rgba(212,175,55,0.08)", // fundo sutil
                 padding: "6px 12px",
                 borderRadius: 999,
                 fontWeight: 600,
                 fontSize: 12,
                 lineHeight: 1,
                 cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(212,175,55,0.18)"
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(212,175,55,0.08)"
               }}
             >
               <svg

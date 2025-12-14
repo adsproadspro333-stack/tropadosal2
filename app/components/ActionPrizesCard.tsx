@@ -1,12 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import {
-  Box,
-  Typography,
-  IconButton,
-  Collapse,
-} from "@mui/material"
+import { Box, Typography, IconButton, Collapse } from "@mui/material"
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore"
 
 export default function ActionPrizesCard() {
@@ -62,7 +57,7 @@ export default function ActionPrizesCard() {
                 mt: 0.2,
               }}
             >
-              Mais de <strong>R$ 1.100.000,00</strong> em prêmios.
+              Milhares de prêmios entregues nesta ação.
             </Typography>
           </Box>
 
@@ -88,8 +83,14 @@ export default function ActionPrizesCard() {
             }}
           >
             {[
-              "1x Prêmio principal de R$ 1.100.000,00 no PIX",
-              "5x Casas próprias quitadas",
+              "1x Moto BMW GS 1300",
+              "10x CG 160 FAN",
+              "10x iPhone 17 Pro Max",
+              "02x R$ 10.000,00 no PIX",
+              "04x R$ 5.000,00 no PIX",
+              "10x R$ 1.000,00 no PIX",
+              "20x R$ 500,00 no PIX",
+              "40x R$ 250,00 no PIX",
             ].map((item) => (
               <Typography
                 key={item}
@@ -97,7 +98,7 @@ export default function ActionPrizesCard() {
                 sx={{
                   fontSize: "0.85rem",
                   color: "#111827",
-                  mb: 0.3,
+                  mb: 0.4,
                   display: "flex",
                   alignItems: "center",
                   gap: 1,
@@ -111,6 +112,7 @@ export default function ActionPrizesCard() {
                     height: 6,
                     borderRadius: "50%",
                     bgcolor: "#B91C1C",
+                    flexShrink: 0,
                   }}
                 />
                 {item}

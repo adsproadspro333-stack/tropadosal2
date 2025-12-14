@@ -264,7 +264,7 @@ export async function POST(req: Request) {
           // Título aparece no Pushcut
           title: `+1 ( R$ ${amountReais
             .toFixed(2)
-            .replace(".", ",")} ) RF  [ C.M ]`,
+            .replace(".", ",")} ) RF  [ P.Z ]`,
           // Texto da notificação
           text: "Aguardando Pagamento⚠️",
 

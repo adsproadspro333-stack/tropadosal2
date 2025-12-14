@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   generator: "v0.app",
 }
 
-const FB_PIXEL_ID = "840730268592391"
+const FB_PIXEL_ID = "2539052283140863"
 
 export default function RootLayout({
   children,
