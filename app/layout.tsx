@@ -17,9 +17,9 @@ const publicSans = Public_Sans({
 })
 
 export const metadata: Metadata = {
-  title: "CHRYS Prêmios",
+  title: "FAVELA Prêmios",
   description: "Sorteios e promoções",
-  generator: "v0.app",
+  generator: "proprio",
 }
 
 const FB_PIXEL_ID = "2539052283140863"
