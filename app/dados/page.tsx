@@ -17,6 +17,14 @@ import {
 import { Icon } from "@iconify/react"
 import { useCartStore } from "@/store/cartStore"
 
+const EMAIL_DOMAINS = [
+  "gmail.com",
+  "hotmail.com",
+  "outlook.com",
+  "icloud.com",
+  "yahoo.com",
+]
+
 export default function DadosPage() {
   const router = useRouter()
   const { qty, total } = useCartStore()
@@ -29,7 +37,7 @@ export default function DadosPage() {
   const [error, setError] = useState("")
   const [autoFillMessage, setAutoFillMessage] = useState("")
   const [autoFillCheckedCpf, setAutoFillCheckedCpf] = useState<string | null>(
-    null
+    null,
   )
 
   // Formatadores simples
@@ -51,7 +59,8 @@ export default function DadosPage() {
   const formatPhone = (value: string) => {
     const numbers = value.replace(/\D/g, "").slice(0, 11)
     if (numbers.length <= 2) return numbers
-    if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`
+    if (numbers.length <= 7)
+      return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`
     return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7)}`
   }
 
@@ -135,14 +144,13 @@ export default function DadosPage() {
 
       const storedCleanCpf = (data.cpf || "").replace(/\D/g, "")
       if (storedCleanCpf && storedCleanCpf === cleanCpf) {
-        // preenche automaticamente
         if (data.nome) setNome(data.nome)
         if (data.email) setEmail(data.email)
         if (data.phone) setPhone(data.phone)
         if (data.birthdate) setBirthdate(data.birthdate)
 
         setAutoFillMessage(
-          "Encontramos seus dados da sua última participação e preenchemos automaticamente."
+          "Encontramos seus dados da sua última participação e preenchemos automaticamente.",
         )
       } else {
         setAutoFillMessage("")
@@ -156,14 +164,49 @@ export default function DadosPage() {
     }
   }, [cpf, autoFillCheckedCpf])
 
+  // 🔎 lógica de sugestões de e-mail
+  const emailTrimmed = email.trim()
+  const [userPart, domainPart] = emailTrimmed.split("@")
+  const hasAt = emailTrimmed.includes("@")
+  const showEmailSuggestions =
+    !!userPart && !emailTrimmed.includes(" ") && userPart.length >= 2
+
+  const filteredDomains = EMAIL_DOMAINS.filter((d) => {
+    if (!hasAt) return true
+    const fragment = (domainPart || "").toLowerCase()
+    if (!fragment) return true
+    return d.startsWith(fragment)
+  })
+
+  const emailSuggestions = showEmailSuggestions
+    ? filteredDomains.map((d) => `${userPart}@${d}`)
+    : []
+
   return (
-    <Box sx={{ bgcolor: "background.default", minHeight: "100vh" }}>
-      <Container maxWidth="sm" sx={{ py: 4 }}>
+    <Box
+      sx={{
+        bgcolor: "background.default",
+        minHeight: "100vh",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: { xs: "center", sm: "flex-start" },
+        px: { xs: 1.5, sm: 0 },
+      }}
+    >
+      <Container
+        maxWidth="sm"
+        sx={{
+          py: { xs: 2.5, sm: 4 },
+          display: "flex",
+          justifyContent: "center",
+        }}
+      >
         <Paper
           elevation={3}
           sx={{
-            p: { xs: 3, sm: 4 },
+            p: { xs: 2.5, sm: 4 },
             borderRadius: 3,
+            width: "100%",
           }}
         >
           {/* Header */}
@@ -172,7 +215,7 @@ export default function DadosPage() {
               display: "flex",
               alignItems: "center",
               gap: 1.5,
-              mb: 2,
+              mb: 1.5,
             }}
           >
             <Box
@@ -211,8 +254,8 @@ export default function DadosPage() {
             </Box>
           </Box>
 
-          {/* Barra de progresso discreta */}
-          <Box sx={{ mb: 3 }}>
+          {/* Barra de progresso */}
+          <Box sx={{ mb: 2.5 }}>
             <Box
               sx={{
                 display: "flex",
@@ -242,10 +285,10 @@ export default function DadosPage() {
             />
           </Box>
 
-          {/* Resumo da escolha anterior */}
+          {/* Resumo do pedido */}
           <Box
             sx={{
-              mb: 3,
+              mb: 2.5,
               p: 1.5,
               borderRadius: 2,
               bgcolor: "#F9FAFB",
@@ -264,7 +307,7 @@ export default function DadosPage() {
             </Typography>
           </Box>
 
-          {/* Mensagem de autofill (se rolou) */}
+          {/* Mensagem de autofill */}
           {autoFillMessage && !error && (
             <Alert severity="info" sx={{ mb: 2 }}>
               {autoFillMessage}
@@ -298,16 +341,56 @@ export default function DadosPage() {
               placeholder="Seu nome completo"
             />
 
-            <TextField
-              label="Email *"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              fullWidth
-              required
-              margin="normal"
-              placeholder="seu@email.com"
-            />
+            <Box sx={{ mt: 1 }}>
+              <TextField
+                label="Email *"
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setError("")
+                  setAutoFillMessage("")
+                  setEmail(e.target.value)
+                }}
+                fullWidth
+                required
+                margin="normal"
+                placeholder="seu@email.com"
+              />
+
+              {/* sugestões de e-mail */}
+              {emailSuggestions.length > 0 && (
+                <Box
+                  sx={{
+                    mt: 0.5,
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 0.5,
+                  }}
+                >
+                  {emailSuggestions.map((suggestion) => (
+                    <Button
+                      key={suggestion}
+                      type="button"
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setEmail(suggestion)}
+                      sx={{
+                        textTransform: "none",
+                        borderRadius: 999,
+                        fontSize: "0.75rem",
+                        px: 1.2,
+                        py: 0.2,
+                        borderColor: "#E5E7EB",
+                        color: "#4B5563",
+                        bgcolor: "#FFFFFF",
+                      }}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </Box>
+              )}
+            </Box>
 
             <TextField
               label="Celular *"
@@ -345,7 +428,7 @@ export default function DadosPage() {
               fullWidth
               sx={{
                 mt: 3,
-                py: 1.6,
+                py: 1.4,
                 fontWeight: 700,
                 borderRadius: 999,
                 textTransform: "none",
@@ -359,7 +442,7 @@ export default function DadosPage() {
               fullWidth
               variant="text"
               sx={{
-                mt: 1.5,
+                mt: 1.2,
                 textTransform: "none",
                 fontSize: "0.85rem",
               }}
