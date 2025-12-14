@@ -14,7 +14,7 @@ import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 
-const BUMP_QTY = 2000          // +2.000 números extras
+const BUMP_QTY = 50          // +2.000 números extras
 const BUMP_PRICE_CENTS = 990   // R$ 9,90
 
 // tempo inicial do contador: 1 minuto
@@ -88,7 +88,7 @@ export default function OrderBumpCard() {
       )} números adicionados <b>(${formatBRL(
         BUMP_PRICE_CENTS / 100,
       )})</b>`,
-      "special-2000-990",
+      "special-50-990",
     )
   }
 

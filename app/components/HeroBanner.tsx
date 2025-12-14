@@ -20,55 +20,13 @@ export default function HeroBanner() {
         flexDirection: "column",
         justifyContent: "center",
         alignItems: "center",
-        bgcolor: "#F3F4F6",
+        bgcolor: "#FFFFFF",
         px: 1.5,
-        pt: 0,       // 🔻 zerado
-        pb: 1.2,     // um pouco menos
-        gap: 1.5,    // um pouco menos
+        pt: 1.5,
+        pb: 1.5,
       }}
     >
-      {/* Headline minimalista */}
-      <Box
-        sx={{
-          width: "100%",
-          maxWidth: 420,
-          textAlign: "center",
-          mb: 0.25,   // 🔻 menos margem embaixo
-        }}
-      >
-        <Typography
-          component="h1"
-          sx={{
-            fontSize: "1.05rem",
-            fontWeight: 800,
-            lineHeight: 1.25,
-            color: "#111827",
-          }}
-        >
-          É a sua chance para{" "}
-          <Box component="span" sx={{ color: "#B91C1C" }}>
-            MUDAR
-          </Box>{" "}
-          de vida
-        </Typography>
-
-        <Typography
-          component="p"
-          sx={{
-            mt: 0.4,
-            fontSize: "0.85rem",
-            color: "#4B5563",
-          }}
-        >
-          Com apenas{" "}
-          <Box component="span" sx={{ fontWeight: 700, color: "#16A34A" }}>
-            R$ 9,90
-          </Box>{" "}
-          você já está concorrendo agora.
-        </Typography>
-      </Box>
-
-      {/* Banner principal */}
+      {/* Banner */}
       <Box
         sx={{
           position: "relative",
@@ -89,7 +47,7 @@ export default function HeroBanner() {
           sx={{
             position: "relative",
             width: "100%",
-            paddingTop: "60%",
+            paddingTop: "50%", // mesma proporção do site deles
           }}
         >
           <Image
@@ -103,6 +61,84 @@ export default function HeroBanner() {
               objectPosition: "center 45%",
             }}
           />
+        </Box>
+      </Box>
+
+      {/* 🔥 Faixa abaixo do banner — IDENTICA à deles */}
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 420,
+          mt: 1.5,
+          bgcolor: "#F9FAFB", // equivalente ao bg-background-pri
+          borderBottom: "2px solid #E5E7EB", // border-background-sec
+          borderRadius: "0 0 12px 12px",
+          py: 1.2,
+          px: 1,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+        }}
+      >
+        {/* Linha 1 → Sorteio */}
+        <Box sx={{ pl: "10px", fontFamily: "Inter" }}>
+          <Typography
+            component="span"
+            sx={{
+              fontWeight: 600,
+              fontSize: "0.75rem",
+            }}
+          >
+            🍀 Sorteio:{" "}
+          </Typography>
+
+          <Typography
+            component="span"
+            sx={{
+              fontWeight: 600,
+              fontSize: "0.75rem",
+              color: "#374151", // text-grayplay-700
+            }}
+          >
+            26/12/2025 21:00
+          </Typography>
+        </Box>
+
+        {/* Linha 2 → Preço */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            pr: 2,
+            pl: "10px",
+            alignSelf: "flex-end",
+            fontFamily: "Inter",
+          }}
+        >
+          <Typography
+            component="span"
+            sx={{
+              fontSize: "0.85rem",
+              color: "#374151",
+            }}
+          >
+            Por apenas
+          </Typography>
+
+          <Box
+            sx={{
+              backgroundColor: "#16A34A", // bg-btn-gst-pri
+              color: "#FFFFFF",
+              px: 1,
+              py: 0.4,
+              borderRadius: 1,
+              fontWeight: 700,
+              fontSize: "0.85rem",
+            }}
+          >
+            R$ 9,90
+          </Box>
         </Box>
       </Box>
     </Box>

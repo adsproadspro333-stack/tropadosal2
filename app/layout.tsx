@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   generator: "v0.app",
 }
 
-const FB_PIXEL_ID = "2539052283140863"
+const FB_PIXEL_ID = "840730268592391"
 
 export default function RootLayout({
   children,
@@ -72,24 +72,26 @@ window.fbq = window.fbq || function() {
           <ThemeProvider theme={theme}>
             <CssBaseline />
             <ToastProvider>
-              {/* Header alinhado ao miolo (480px) */}
-              <header style={{ width: "100%" }}>
-                <div
-                  style={{
-                    width: "100%",
-                    maxWidth: 480,
-                    margin: "0 auto",
-                  }}
-                >
+              {/* Header */}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  width: "100%",
+                }}
+              >
+                <div style={{ width: "100%", maxWidth: 480 }}>
                   <HeaderBar />
                 </div>
-              </header>
+              </div>
 
               {/* Conteúdo */}
-              <main className="page-content" style={{ minHeight: "100dvh" }}>
+              <main
+                className="page-content"
+                style={{ minHeight: "100dvh" }}
+              >
                 {children}
               </main>
-              {/* ✅ Footer global removido: Condições gerais / Regulamento agora só via FooterLegal na home */}
             </ToastProvider>
           </ThemeProvider>
         </AppRouterCacheProvider>

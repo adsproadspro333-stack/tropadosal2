@@ -40,7 +40,7 @@ const UPSELL_OPTIONS = [
     id: "turbo",
     label: "Pacote 10x Mais Sorte",
     ribbon: "ENTRADA PERFEITA",
-    qty: 2000,
+    qty: 100,
     priceCents: 990, // R$ 9,90
     benefitLine: "10x mais sorte gastando muito pouco.",
     highlight:
@@ -50,7 +50,7 @@ const UPSELL_OPTIONS = [
     id: "elite",
     label: "Pacote 20x Mais Sorte",
     ribbon: "MAIS ESCOLHIDO",
-    qty: 5000,
+    qty: 200,
     priceCents: 1990, // R$ 19,90
     benefitLine: "20x mais sorte com o melhor custo–benefício.",
     highlight:
@@ -60,7 +60,7 @@ const UPSELL_OPTIONS = [
     id: "dominator",
     label: "Pacote 50x Mais Sorte",
     ribbon: "CHANCE MÁXIMA",
-    qty: 10000,
+    qty: 300,
     priceCents: 3990, // R$ 39,90
     benefitLine: "50x mais sorte em um único pedido relâmpago.",
     highlight:

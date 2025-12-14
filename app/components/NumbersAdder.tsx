@@ -6,21 +6,18 @@ import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 import { cn } from "@/lib/utils"
 
-// 🎨 CORES PRINCIPAIS
-const PRIMARY_RED = "#8B0000"   // vermelho escuro dos combos
-const LIGHT_RED = "#FEE2E2"     // vermelho claro do fundo selecionado
-const BADGE_GREEN = "#16A34A"   // verde do selo "Mais vendido"
-
 // 🎯 COMBOS
-// 100 → 9,90
-// 200 → 19,90
-// 500 → 49,90
-// 1000 → 99,90
+// AGORA A LÓGICA REAL É 3, 5, 10, 15
+// Mantendo os mesmos preços:
+// 3  →  9,90
+// 5  → 19,90
+// 10 → 49,90
+// 15 → 99,90
 const COMBOS = [
-  { id: "combo-100", quantity: 100, priceCents: 990 },
-  { id: "combo-200", quantity: 200, priceCents: 1990 },
-  { id: "combo-500", quantity: 500, priceCents: 4990 },
-  { id: "combo-1000", quantity: 1000, priceCents: 9990 },
+  { id: "combo-3", quantity: 3, priceCents: 990 },
+  { id: "combo-5", quantity: 5, priceCents: 1990 },
+  { id: "combo-10", quantity: 10, priceCents: 4990 },
+  { id: "combo-15", quantity: 15, priceCents: 9990 },
 ]
 
 let clickAudio: HTMLAudioElement | null = null
@@ -42,9 +39,10 @@ export default function NumbersAdder() {
   const { addComboToCart } = useCartStore()
   const { show } = useToast()
 
-  // combo selecionado no momento (começa no +100 pra destravar mais rápido)
+  // combo “pré-destaque” só visual (não adiciona nada automaticamente)
+  // agora o mais vendido é o de 5 números
   const [selectedComboId, setSelectedComboId] =
-    useState<string | null>("combo-100")
+    useState<string | null>("combo-5")
   const [highlight, setHighlight] = useState(true)
 
   useEffect(() => {
@@ -53,6 +51,7 @@ export default function NumbersAdder() {
   }, [])
 
   const handleAdd = (combo: (typeof COMBOS)[number]) => {
+    // AGORA SOMA 3 / 5 / 10 / 15 NO CARRINHO
     addComboToCart(combo.quantity, combo.priceCents)
     setSelectedComboId(combo.id)
 
@@ -63,22 +62,22 @@ export default function NumbersAdder() {
       | "special-5000"
       | "premium-10000" = "default"
 
-    if (combo.quantity === 100) {
+    if (combo.quantity === 3) {
       message = `+${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "default"
-    } else if (combo.quantity === 200) {
+    } else if (combo.quantity === 5) {
       message = `🔥 Oferta inteligente! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "smart-2500"
-    } else if (combo.quantity === 500) {
+    } else if (combo.quantity === 10) {
       message = `🚀 Aceleração total! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
       toastType = "special-5000"
-    } else if (combo.quantity === 1000) {
+    } else if (combo.quantity === 15) {
       message = `👑 Combo VIP ativado! +${combo.quantity} números adicionados <b>(${formatBRL(
         combo.priceCents / 100,
       )})</b>`
@@ -92,34 +91,19 @@ export default function NumbersAdder() {
 
   return (
     <div className="w-full">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4">
+      {/* bloco dos combos – grid 2x2, igual referência */}
+      <div className="w-full grid grid-cols-2 gap-x-5 gap-y-2.5">
         {COMBOS.map((combo) => {
-          const isFeatured = combo.quantity === 100 // “Mais vendido” no +100
+          // “Mais vendido” fica no segundo card (5 números), igual referência
+          const isFeatured = combo.id === "combo-5"
           const isSelected = selectedComboId === combo.id
 
-          // Mensagem de benefício específica de cada combo
-          const benefitText =
-            combo.quantity === 100
-              ? "Perfeito pra começar agora"
-              : combo.quantity === 200
-              ? "Dobro de chances por R$ 19,90"
-              : combo.quantity === 500
-              ? "Pra acelerar de verdade"
-              : "Combo máximo pra esgotar a edição"
-
-          const ctaText = isSelected
-            ? "Combo selecionado"
-            : "Selecionar combo"
-
-          // ✨ Glow + micro animação só quando o combo está selecionado
           const dynamicStyle: CSSProperties = {
-            ["--primary-red" as any]: PRIMARY_RED,
-            ["--light-red" as any]: LIGHT_RED,
             boxShadow: isSelected
-              ? "0 8px 18px rgba(139,0,0,0.25)"
+              ? "0 8px 18px rgba(15,23,42,0.25)"
               : "0 2px 6px rgba(15,23,42,0.12)",
             transform: isSelected
-              ? "translateY(-1px) scale(1.02)"
+              ? "translateY(-1px) scale(1.01)"
               : "translateY(0) scale(1)",
             transition: "transform 0.18s ease, box-shadow 0.18s ease",
           }
@@ -135,61 +119,31 @@ export default function NumbersAdder() {
               style={dynamicStyle}
               className={cn(
                 "relative w-full select-none cursor-pointer",
-                "rounded-xl border-2 shadow-sm transition-all duration-200 ease-out",
-                "hover:shadow-md hover:scale-[1.02] active:scale-95",
-                "focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#FEE2E2]",
+                "flex flex-col border-[2px] px-3 py-3 rounded-[10px]",
+                "transition-colors duration-150 active:bg-[#c9c9c9]",
                 isSelected
-                  ? "bg-[var(--light-red)] border-[var(--primary-red)] text-[#7F1D1D] hover:bg-[var(--light-red)]"
-                  : "bg-white border-[var(--primary-red)] text-[var(--primary-red)] hover:bg-[var(--light-red)]",
+                  ? "border-[#2563EB] bg-[#DBEAFE]"
+                  : "border-[#E5E7EB] bg-white hover:bg-slate-50",
                 highlight && isFeatured && "motion-safe:animate-soft-pulse",
               )}
             >
-              {/* Badge MAIS VENDIDO sempre no primeiro combo */}
+              {/* Badge “Mais vendido” sempre visível no combo destaque */}
               {isFeatured && (
-                <span
-                  className="absolute -top-2 left-2 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm flex items-center gap-1"
-                  style={{ backgroundColor: BADGE_GREEN }}
-                >
-                  <span className="text-[11px]">🔥</span>
-                  Mais vendido
+                <span className="flex badgeMaisVendido items-center gap-[2px] text-[11px] h-5 rounded-full px-2 w-max absolute -top-2 left-2 bg-[#2563EB] text-white font-semibold shadow">
+                  <span>Mais vendido</span>
                 </span>
               )}
 
-              <div className="text-center pt-2 pb-1">
-                <div className="text-sm font-semibold mb-1">
-                  +{combo.quantity} Números
-                </div>
+              {/* Título + preço, agora com 3 / 5 / 10 / 15 Números */}
+              <p className="font-semibold text-base text-gray-900">
+                {combo.quantity} Números
+              </p>
 
-                <div className="text-base sm:text-lg font-extrabold leading-none">
-                  {formatBRL(combo.priceCents / 100)}
-                </div>
-
-                <div
-                  className={cn(
-                    "mt-1 text-[10px] sm:text-[11px]",
-                    isSelected ? "text-[#7F1D1D]" : "text-slate-600",
-                  )}
-                >
-                  {benefitText}
-                </div>
-
-                {/* CTA + check de seleção */}
-                <div
-                  className={cn(
-                    "mt-2 text-[11px] sm:text-xs flex items-center justify-center gap-1",
-                    isSelected
-                      ? "text-[#7F1D1D] font-semibold"
-                      : "text-[var(--primary-red)] underline underline-offset-2 decoration-[var(--primary-red)]/50",
-                  )}
-                >
-                  {isSelected && (
-                    <span className="inline-flex items-center justify-center leading-none">
-                      ✅
-                    </span>
-                  )}
-                  <span>{ctaText}</span>
-                </div>
-              </div>
+              <p className="mt-0.5 text-[13px] text-gray-700">
+                {" "}
+                Por:{" "}
+                <strong>{formatBRL(combo.priceCents / 100)}</strong>
+              </p>
             </button>
           )
         })}

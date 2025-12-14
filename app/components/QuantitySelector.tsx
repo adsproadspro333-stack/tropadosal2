@@ -1,7 +1,15 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Box, Grid, IconButton, TextField, Button, Stack, Typography } from "@mui/material"
+import {
+  Box,
+  Grid,
+  IconButton,
+  TextField,
+  Button,
+  Stack,
+  Typography,
+} from "@mui/material"
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutline"
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline"
 import { useRouter } from "next/navigation"
@@ -16,7 +24,8 @@ const PRESETS = [
   { label: "+500", q: 500 },
 ]
 
-const UNIT_PRICE_CENTS = 100
+// 👇 mínimo visual/funcional alinhado com o combo padrão (5 / 19,90)
+const MIN_QTY = 5
 
 export default function QuantitySelector() {
   const router = useRouter()
@@ -49,18 +58,24 @@ export default function QuantitySelector() {
   }, [totalInCents])
 
   const inc = () => {
-    handleChangeQuantity(qty + 1)
+    const next = qty + 1
+    handleChangeQuantity(next)
     triggerBump()
   }
 
   const dec = () => {
-    handleChangeQuantity(qty - 1)
+    // garante que nunca desce abaixo do mínimo visual
+    const next = Math.max(MIN_QTY, qty - 1)
+    handleChangeQuantity(next)
     triggerBump()
   }
 
   const onChangeQty = (v: number) => {
     if (!Number.isFinite(v)) return
-    handleChangeQuantity(v)
+
+    // se o cara apagar ou digitar 0/negativo, força o mínimo (5)
+    const safe = Math.max(MIN_QTY, Math.floor(v))
+    handleChangeQuantity(safe)
     triggerBump()
   }
 
@@ -74,7 +89,8 @@ export default function QuantitySelector() {
               variant="outlined"
               fullWidth
               onClick={() => {
-                handleChangeQuantity(qty + p.q)
+                const next = qty + p.q
+                handleChangeQuantity(next)
                 triggerBump()
               }}
               sx={{ fontWeight: 800 }}
@@ -85,16 +101,25 @@ export default function QuantitySelector() {
         ))}
       </Grid>
 
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ justifyContent: "center" }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        spacing={1}
+        sx={{ justifyContent: "center" }}
+      >
         <IconButton aria-label="Diminuir" onClick={dec}>
           <RemoveCircleOutlineIcon />
         </IconButton>
+
         <TextField
           type="number"
           value={qty}
-          onChange={(e) => onChangeQty(Number(e.target.value || 100))}
-          onBlur={(e) => onChangeQty(Number(e.target.value || 100))}
-          inputProps={{ min: 100, style: { textAlign: "center", width: 110 } }}
+          onChange={(e) => onChangeQty(Number(e.target.value))}
+          onBlur={(e) => onChangeQty(Number(e.target.value))}
+          inputProps={{
+            min: MIN_QTY,
+            style: { textAlign: "center", width: 110 },
+          }}
           size="small"
           className={bump ? "animate-bump" : ""}
           InputProps={{
@@ -107,6 +132,7 @@ export default function QuantitySelector() {
             },
           }}
         />
+
         <IconButton aria-label="Aumentar" onClick={inc}>
           <AddCircleOutlineIcon />
         </IconButton>
@@ -132,8 +158,6 @@ export default function QuantitySelector() {
       </Typography>
 
       <Stack spacing={1.5} sx={{ mt: 1.5 }}>
-        {/* ✅ BOTÃO CONTINUAR REMOVIDO */}
-
         <Button
           fullWidth
           variant="outlined"
@@ -141,7 +165,10 @@ export default function QuantitySelector() {
           sx={{ fontWeight: 600 }}
           onClick={() => {
             clearCart()
-            show("Carrinho resetado para o mínimo (100).", "default")
+            show(
+              `Carrinho resetado para o mínimo (${MIN_QTY} números).`,
+              "default",
+            )
           }}
         >
           Limpar

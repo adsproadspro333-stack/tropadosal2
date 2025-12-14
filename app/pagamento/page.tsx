@@ -141,6 +141,8 @@ export default function PagamentoPage() {
         const data = await response.json()
 
         if (!response.ok || data.error) {
+          // aqui vai cair o safeMessage da rota:
+          // "Erro ao processar o pagamento. Tente novamente em instantes."
           throw new Error(data.error || "Falha ao gerar PIX")
         }
 
@@ -187,7 +189,7 @@ export default function PagamentoPage() {
 
     generatePix()
 
-    // contador de tempo
+    // contador de tempo (visual)
     let minutes = 14
     let seconds = 28
     const interval = setInterval(() => {
@@ -308,19 +310,102 @@ export default function PagamentoPage() {
     )
   }
 
+  // 🔴 Tela de erro - ajustada pra experiência melhor
   if (error) {
     return (
-      <Box sx={{ bgcolor: "background.default", minHeight: "100vh", pb: 4 }}>
-        <Container maxWidth="md" sx={{ py: 4 }}>
-          <Alert severity="error">{error}</Alert>
-          <Button
-            variant="contained"
-            color="primary"
-            sx={{ mt: 2 }}
-            onClick={() => router.back()}
+      <Box sx={{ bgcolor: "#F3F4F6", minHeight: "100vh", pb: 4 }}>
+        <Container maxWidth="sm" sx={{ py: 4 }}>
+          <Paper
+            elevation={0}
+            sx={{
+              p: 3,
+              borderRadius: 2,
+              border: "1px solid #FCA5A5",
+              bgcolor: "#FEF2F2",
+              boxShadow: "0 10px 30px rgba(248,113,113,0.18)",
+            }}
           >
-            Voltar
-          </Button>
+            <Stack spacing={2}>
+              <Stack direction="row" spacing={1.5} alignItems="center">
+                <Box
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: "999px",
+                    bgcolor: "#FEE2E2",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon icon="mdi:alert-circle-outline" width={24} color="#B91C1C" />
+                </Box>
+                <Box>
+                  <Typography
+                    variant="subtitle1"
+                    sx={{ fontWeight: 700, color: "#B91C1C" }}
+                  >
+                    Não foi possível gerar o PIX agora
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    sx={{ color: "#7F1D1D", fontSize: "0.85rem" }}
+                  >
+                    {error}
+                  </Typography>
+                </Box>
+              </Stack>
+
+              <Typography
+                variant="caption"
+                sx={{ color: "#7F1D1D", fontSize: "0.75rem" }}
+              >
+                Isso geralmente acontece quando o emissor do PIX está instável.
+                Seus dados e seu pedido continuam seguros – você pode tentar novamente
+                em alguns instantes.
+              </Typography>
+
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={1.5}
+                sx={{ mt: 1 }}
+              >
+                <Button
+                  variant="contained"
+                  color="error"
+                  fullWidth
+                  onClick={() => {
+                    // reload total da página pra recomeçar o fluxo
+                    if (typeof window !== "undefined") {
+                      window.location.reload()
+                    } else {
+                      router.refresh()
+                    }
+                  }}
+                  sx={{
+                    fontWeight: 700,
+                    borderRadius: 999,
+                    textTransform: "none",
+                  }}
+                >
+                  Tentar gerar PIX novamente
+                </Button>
+
+                <Button
+                  variant="text"
+                  fullWidth
+                  onClick={() => router.back()}
+                  sx={{
+                    fontWeight: 500,
+                    borderRadius: 999,
+                    textTransform: "none",
+                  }}
+                >
+                  Voltar
+                </Button>
+              </Stack>
+            </Stack>
+          </Paper>
         </Container>
       </Box>
     )

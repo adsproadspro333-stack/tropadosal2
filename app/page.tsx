@@ -25,8 +25,19 @@ import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 
 export default function HomePage() {
-  // 🛒 Carrinho visível na Home
-  const { qty, totalInCents, handleChangeQuantity, clearCart } = useCartStore()
+  const router = useRouter()
+
+  const {
+    qty,
+    totalInCents,
+    handleChangeQuantity,
+    clearCart,
+    comboQty,
+  } = useCartStore()
+
+  // 🔁 Mínimo agora SEMPRE é o combo atual (3, 5, 10, 15...)
+  const currentMinQty = comboQty || 0
+  const disabledInline = qty < currentMinQty
 
   // 🔹 1) Evento de ViewContent
   useEffect(() => {
@@ -86,7 +97,7 @@ export default function HomePage() {
     )
   }, [])
 
-  // handlers pro seletor inline (dentro da Home)
+  // handlers seletor inline
   const incInline = () => {
     handleChangeQuantity(qty + 1)
   }
@@ -97,42 +108,45 @@ export default function HomePage() {
   }
 
   const resetInline = () => {
-    clearCart() // 🔁 Zera tudo (quantidade + valores)
+    clearCart()
+  }
+
+  const handleInlineBuy = () => {
+    if (disabledInline) return
+    router.push("/dados")
   }
 
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        bgcolor: "#FFFFFF",
+        bgcolor: "#F3F4F6",
         display: "flex",
         justifyContent: "center",
       }}
     >
-      {/* 🔹 Miolo central: tudo que importa fica dentro deste box */}
+      {/* Miolo central */}
       <Box
         sx={{
           width: "100%",
-          maxWidth: 480, // controla o “tamanho do site” (desktop e mobile)
+          maxWidth: 480,
           mx: "auto",
-          // 🔥 espaço extra pra não ser tampado pelo CTA fixo
-          pb: { xs: 11, sm: 12 },
+          pb: { xs: 4, sm: 5 },
         }}
       >
         <Container
           maxWidth="sm"
           sx={{
             px: { xs: 2, sm: 0 },
-            pt: 0, // 🔥 sem espaço entre header e card
+            pt: { xs: 2, sm: 3 },
             position: "relative",
             zIndex: 2,
           }}
         >
-          {/* 🔶 CARD ÚNICO: HERO + COMBOS + AJUSTE + ZERAR */}
+          {/* CARD PRINCIPAL */}
           <Paper
             elevation={4}
             sx={{
-              mt: -1, // 🔥 puxa o card levemente pra cima, colando no header
               mb: 2,
               borderRadius: 2.5,
               bgcolor: "#FFFFFF",
@@ -141,22 +155,17 @@ export default function HomePage() {
               overflow: "hidden",
             }}
           >
-            {/* Hero/banner dentro do mesmo card */}
-            <Box
-              sx={{
-                bgcolor: "#FFFFFF",
-              }}
-            >
+            <Box sx={{ bgcolor: "#FFFFFF" }}>
               <HeroBanner />
             </Box>
 
-            {/* Conteúdo abaixo do banner (combos + seletor) */}
             <Box sx={{ p: 1.8, pt: 1.4 }}>
+              {/* Combos de números */}
               <Stack
                 direction="row"
                 justifyContent="space-between"
                 alignItems="center"
-                mb={1}
+                mb={1.5}
               >
                 <Box>
                   <Typography
@@ -181,110 +190,96 @@ export default function HomePage() {
                 </Box>
               </Stack>
 
-              {/* grid de combos */}
               <NumbersAdder />
 
-              <Divider sx={{ my: 1.8 }} />
+              <Divider sx={{ my: 2 }} />
 
-              {/* seletor + total + botão Zerar */}
+              {/* Seletor [-] qty [+] + CTA inline */}
               <Box>
-                <Typography
-                  variant="subtitle2"
-                  sx={{
-                    fontWeight: 700,
-                    fontSize: "0.9rem",
-                    color: "#111827",
-                    mb: 0.4,
-                  }}
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="center"
+                  sx={{ mb: 1.6 }}
+                  spacing={1.8}
                 >
-                  Ajustar quantidade
-                </Typography>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    fontSize: "0.78rem",
-                    color: "#6B7280",
-                    mb: 1,
-                  }}
-                >
-                  Use o seletor abaixo para refinar a quantidade total de
-                  números desta edição.
-                </Typography>
+                  <Button
+                    onClick={decInline}
+                    variant="outlined"
+                    size="medium"
+                    sx={{
+                      minWidth: 56,
+                      height: 48,
+                      borderRadius: 1.5,
+                      px: 0,
+                      fontWeight: 700,
+                      fontSize: "1.2rem",
+                      borderColor: "#E5E7EB",
+                      color: "#4B5563",
+                    }}
+                  >
+                    −
+                  </Button>
+
+                  <Box
+                    sx={{
+                      flex: 1,
+                      maxWidth: 200,
+                      px: 2,
+                      py: 1,
+                      borderRadius: 1.5,
+                      border: "2px solid #E5E7EB",
+                      textAlign: "center",
+                      bgcolor: "#FFFFFF",
+                    }}
+                  >
+                    <Typography
+                      sx={{
+                        fontWeight: 600,
+                        fontSize: "1.2rem",
+                        color: "#111827",
+                      }}
+                    >
+                      {qty}
+                    </Typography>
+                  </Box>
+
+                  <Button
+                    onClick={incInline}
+                    variant="outlined"
+                    size="medium"
+                    sx={{
+                      minWidth: 56,
+                      height: 48,
+                      borderRadius: 1.5,
+                      px: 0,
+                      fontWeight: 700,
+                      fontSize: "1.2rem",
+                      borderColor: "#E5E7EB",
+                      color: "#4B5563",
+                    }}
+                  >
+                    +
+                  </Button>
+                </Stack>
 
                 <Stack
                   direction="row"
                   alignItems="center"
                   justifyContent="space-between"
-                  sx={{ mb: 1.2 }}
+                  sx={{
+                    mt: 0.5,
+                  }}
                 >
-                  <Box
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 0.5,
-                    }}
-                  >
-                    <Button
-                      onClick={decInline}
-                      variant="outlined"
-                      size="small"
-                      sx={{
-                        minWidth: 36,
-                        borderRadius: 999,
-                        px: 0,
-                        fontWeight: 700,
-                        borderColor: "#D1D5DB",
-                        color: "#4B5563",
-                      }}
-                    >
-                      −
-                    </Button>
-
-                    <Box
-                      sx={{
-                        px: 2,
-                        py: 0.7,
-                        borderRadius: 999,
-                        border: "1px solid #D1D5DB",
-                        minWidth: 64,
-                        textAlign: "center",
-                        bgcolor: "#F9FAFB",
-                      }}
-                    >
-                      <Typography
-                        sx={{
-                          fontWeight: 600,
-                          fontSize: "0.9rem",
-                          color: "#111827",
-                        }}
-                      >
-                        {qty}
-                      </Typography>
-                    </Box>
-
-                    <Button
-                      onClick={incInline}
-                      variant="outlined"
-                      size="small"
-                      sx={{
-                        minWidth: 36,
-                        borderRadius: 999,
-                        px: 0,
-                        fontWeight: 700,
-                        borderColor: "#D1D5DB",
-                        color: "#4B5563",
-                      }}
-                    >
-                      +
-                    </Button>
-                  </Box>
-
-                  <Box sx={{ textAlign: "right" }}>
+                  <Box>
                     <Typography
                       variant="caption"
-                      sx={{ fontSize: "0.78rem", color: "#6B7280" }}
+                      sx={{
+                        fontSize: "0.78rem",
+                        color: "#6B7280",
+                      }}
                     >
-                      {qty} números selecionados
+                      {qty} Números
                     </Typography>
                     <Typography
                       variant="subtitle2"
@@ -297,30 +292,103 @@ export default function HomePage() {
                       {formatBRL(totalInCents / 100)}
                     </Typography>
                   </Box>
+
+                  <Button
+                    variant="contained"
+                    onClick={handleInlineBuy}
+                    disabled={disabledInline}
+                    sx={{
+                      minWidth: 160,
+                      height: 44,
+                      borderRadius: 1.5,
+                      fontWeight: 700,
+                      fontSize: "0.9rem",
+                      textTransform: "none",
+                      bgcolor: disabledInline ? "#9CA3AF" : "#16A34A",
+                      color: "#FFFFFF",
+                      boxShadow: disabledInline
+                        ? "0 0 0 rgba(0,0,0,0)"
+                        : "0px 6px 14px rgba(22,163,74,0.35)",
+                      "&:hover": {
+                        bgcolor: disabledInline ? "#9CA3AF" : "#15803D",
+                      },
+                    }}
+                  >
+                    {disabledInline
+                      ? `Mínimo de ${currentMinQty} números`
+                      : "Comprar"}
+                  </Button>
                 </Stack>
 
-                {/* 🔄 Botão ZERAR */}
                 <Button
-                  variant="outlined"
+                  variant="text"
                   fullWidth
                   size="small"
                   onClick={resetInline}
                   sx={{
-                    mt: 0.5,
+                    mt: 0.8,
                     borderRadius: 999,
-                    fontWeight: 600,
+                    fontWeight: 500,
                     fontSize: "0.78rem",
-                    borderColor: "#E5E7EB",
                     color: "#6B7280",
+                    textTransform: "none",
                   }}
                 >
-                  Zerar
+                  Zerar seleção
                 </Button>
               </Box>
             </Box>
           </Paper>
 
-          {/* 1.5) PRÊMIOS DA AÇÃO */}
+          {/* Área do cliente */}
+          <Paper
+            elevation={3}
+            sx={{
+              mb: 2,
+              p: 1.8,
+              borderRadius: 2,
+              bgcolor: "#FFFFFF",
+              border: "1px solid #E5E7EB",
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 700,
+                mb: 0.6,
+                fontSize: "0.98rem",
+                color: "#111827",
+              }}
+            >
+              Área do cliente
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{
+                mb: 1.4,
+                fontSize: "0.8rem",
+                color: "#6B7280",
+              }}
+            >
+              Consulte suas compras, números e comprovantes sempre que quiser.
+            </Typography>
+
+            <Button
+              variant="outlined"
+              fullWidth
+              sx={{
+                borderRadius: 999,
+                fontWeight: 600,
+                fontSize: "0.9rem",
+                textTransform: "none",
+              }}
+              onClick={() => router.push("/compras")}
+            >
+              Minhas compras
+            </Button>
+          </Paper>
+
+          {/* Prêmios da ação */}
           <Paper
             elevation={3}
             sx={{
@@ -334,7 +402,7 @@ export default function HomePage() {
             <ActionPrizesCard />
           </Paper>
 
-          {/* 2) Como funciona a ação */}
+          {/* Como funciona */}
           <Paper
             elevation={3}
             sx={{
@@ -433,7 +501,7 @@ export default function HomePage() {
             </Stack>
           </Paper>
 
-          {/* 3) Ganhadores recentes */}
+          {/* Ganhadores recentes */}
           <Paper
             elevation={3}
             sx={{
@@ -463,13 +531,13 @@ export default function HomePage() {
                 color: "#6B7280",
               }}
             >
-              Confira alguns dos últimos prêmios entregues pela POZE PREMIOS.
+              Confira alguns dos últimos prêmios entregues pelo Carlinhos Maia.
             </Typography>
 
             <WinnersList initialCount={4} />
           </Paper>
 
-          {/* 4) Progresso de vendas */}
+          {/* Progresso de vendas */}
           <Paper
             elevation={3}
             sx={{
@@ -508,196 +576,13 @@ export default function HomePage() {
             </Typography>
           </Paper>
 
-          {/* 5) Texto legal SUSEP */}
           <FooterLegal />
         </Container>
       </Box>
 
       {/* Notificações flutuantes */}
       <SocialProofNotifications />
-
-      {/* CTA fixo */}
-      <StickyCTA />
-    </Box>
-  )
-}
-
-/**
- * CTA fixo no rodapé: quantidade + valor + seletor + botão "Concorrer".
- */
-function StickyCTA() {
-  const router = useRouter()
-  const { qty, totalInCents, handleChangeQuantity } = useCartStore()
-  const disabled = qty < 100
-  const MIN_QTY = 100
-
-  const inc = () => {
-    handleChangeQuantity(qty + 1)
-  }
-
-  const dec = () => {
-    if (qty <= MIN_QTY) return
-    handleChangeQuantity(qty - 1)
-  }
-
-  const handleClick = () => {
-    if (disabled) return
-    router.push("/dados")
-  }
-
-  return (
-    <Box
-      sx={{
-        position: "fixed",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 1300,
-        bgcolor: "#FFFFFF",
-        boxShadow: "0 -8px 24px rgba(15,23,42,0.16)",
-        borderTop: "1px solid #E5E7EB",
-        py: 1,
-      }}
-    >
-      <Container maxWidth="sm" sx={{ px: { xs: 2, sm: 0 } }}>
-        {/* 🔹 Garante que o CTA fica alinhado com o mesmo miolo de 480px */}
-        <Box
-          sx={{
-            width: "100%",
-            maxWidth: 480,
-            mx: "auto",
-          }}
-        >
-          <Stack spacing={1}>
-            {/* linha com quantidade / valor / seletor */}
-            <Stack
-              direction="row"
-              alignItems="center"
-              justifyContent="space-between"
-            >
-              <Box>
-                <Typography
-                  variant="caption"
-                  sx={{ fontSize: "0.78rem", color: "#6B7280" }}
-                >
-                  {qty} Números
-                </Typography>
-                <Typography
-                  variant="subtitle1"
-                  sx={{
-                    fontWeight: 700,
-                    fontSize: "1rem",
-                    color: "#111827",
-                  }}
-                >
-                  {formatBRL(totalInCents / 100)}
-                </Typography>
-              </Box>
-
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 0.5,
-                }}
-              >
-                <Button
-                  onClick={dec}
-                  variant="outlined"
-                  size="small"
-                  sx={{
-                    minWidth: 36,
-                    borderRadius: 999,
-                    px: 0,
-                    fontWeight: 700,
-                    borderColor: "#D1D5DB",
-                    color: "#4B5563",
-                  }}
-                >
-                  −
-                </Button>
-
-                <Box
-                  sx={{
-                    px: 2,
-                    py: 0.7,
-                    borderRadius: 999,
-                    border: "1px solid #D1D5DB",
-                    minWidth: 64,
-                    textAlign: "center",
-                    bgcolor: "#F9FAFB",
-                  }}
-                >
-                  <Typography
-                    sx={{
-                      fontWeight: 600,
-                      fontSize: "0.9rem",
-                      color: "#111827",
-                    }}
-                  >
-                    {qty}
-                  </Typography>
-                </Box>
-
-                <Button
-                  onClick={inc}
-                  variant="outlined"
-                  size="small"
-                  sx={{
-                    minWidth: 36,
-                    borderRadius: 999,
-                    px: 0,
-                    fontWeight: 700,
-                    borderColor: "#D1D5DB",
-                    color: "#4B5563",
-                  }}
-                >
-                  +
-                </Button>
-              </Box>
-            </Stack>
-
-            {/* botão principal */}
-            <Button
-              onClick={handleClick}
-              variant="contained"
-              fullWidth
-              disabled={disabled}
-              sx={{
-                fontWeight: 800,
-                borderRadius: 999,
-                py: 1.1,
-                fontSize: "0.98rem",
-                textTransform: "none",
-                letterSpacing: 0.3,
-                bgcolor: disabled ? "#9CA3AF" : "#16A34A",
-                color: "#ffffff",
-                boxShadow: disabled
-                  ? "0 0 0 rgba(0,0,0,0)"
-                  : "0px 8px 18px rgba(0,0,0,0.18)",
-                transform: "translateY(0)",
-                transition:
-                  "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease",
-                "&:hover": {
-                  bgcolor: disabled ? "#9CA3AF" : "#15803D",
-                  transform: disabled ? "none" : "translateY(-2px)",
-                  boxShadow: disabled
-                    ? "0 0 0 rgba(0,0,0,0)"
-                    : "0px 12px 26px rgba(0,0,0,0.25)",
-                },
-                "&:active": {
-                  transform: disabled ? "none" : "scale(0.97)",
-                  boxShadow: disabled
-                    ? "0 0 0 rgba(0,0,0,0)"
-                    : "0px 6px 14px rgba(0,0,0,0.2)",
-                },
-              }}
-            >
-              {disabled ? "Selecione pelo menos 100 números" : "Concorrer"}
-            </Button>
-          </Stack>
-        </Box>
-      </Container>
+      {/* <StickyCTA /> */}
     </Box>
   )
 }

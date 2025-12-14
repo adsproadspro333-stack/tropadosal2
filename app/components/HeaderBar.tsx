@@ -14,18 +14,19 @@ export default function HeaderBar() {
         top: 0,
         zIndex: 50,
         width: "100%",
-        backgroundColor: "#F3F4F6",
-        boxShadow: "0 1px 2px rgba(15,23,42,0.08)",
+        backgroundColor: "#F3F4F6", // acompanha o fundo da página
+        boxShadow: "0 1px 2px rgba(15,23,42,0.08)", // sombra leve
       }}
     >
       <div
         style={{
-          padding: "8px 0", // 🔥 reduz altura – antes era height: 60
+          height: 60,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
         }}
       >
+        {/* centraliza o conteúdo no mesmo miolo de 480px */}
         <div
           style={{
             width: "100%",
@@ -37,7 +38,7 @@ export default function HeaderBar() {
             gap: 8,
           }}
         >
-          {/* LOGO */}
+          {/* LOGO À ESQUERDA */}
           <Link
             href="/"
             aria-label="Página inicial"
@@ -57,7 +58,7 @@ export default function HeaderBar() {
                 priority
                 sizes="(max-width: 640px) 180px, 260px"
                 style={{
-                  height: 40, // 🔥 menor para deixar header elegante
+                  height: 48,
                   width: "auto",
                   objectFit: "contain",
                 }}
@@ -77,7 +78,11 @@ export default function HeaderBar() {
           </Link>
 
           {/* BOTÃO MINHAS COMPRAS */}
-          <Link href="/compras" aria-label="Minhas compras" style={{ textDecoration: "none" }}>
+          <Link
+            href="/compras"
+            aria-label="Minhas compras"
+            style={{ textDecoration: "none" }}
+          >
             <button
               type="button"
               style={{

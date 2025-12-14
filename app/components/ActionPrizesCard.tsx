@@ -55,6 +55,15 @@ export default function ActionPrizesCard() {
             >
               PRÊMIOS DA AÇÃO
             </Typography>
+            <Typography
+              sx={{
+                fontSize: "0.75rem",
+                color: "#6B7280",
+                mt: 0.2,
+              }}
+            >
+              Mais de <strong>R$ 1.100.000,00</strong> em prêmios.
+            </Typography>
           </Box>
 
           <IconButton
@@ -79,13 +88,8 @@ export default function ActionPrizesCard() {
             }}
           >
             {[
-              "10x CG 160 FAN",
-              "10x iPhone 17 Pro Max",
-              "02x R$ 10.000,00",
-              "04x R$ 5.000,00",
-              "10x R$ 1.000,00",
-              "20x R$ 500,00",
-              "40x R$ 250,00",
+              "1x Prêmio principal de R$ 1.100.000,00 no PIX",
+              "5x Casas próprias quitadas",
             ].map((item) => (
               <Typography
                 key={item}

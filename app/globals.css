@@ -89,8 +89,8 @@
   --sidebar-ring: oklch(0.439 0 0);
 }
 
+/* Tailwind theme layer */
 @theme inline {
-  /* optional: --font-sans, --font-serif, --font-mono if they are applied in the layout.tsx */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -129,43 +129,23 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/* Add bump animation for quantity selector */
+/* Animations */
 @keyframes bump {
-  0% {
-    transform: scale(1);
-  }
-  35% {
-    transform: scale(1.06);
-  }
-  100% {
-    transform: scale(1);
-  }
+  0% { transform: scale(1); }
+  35% { transform: scale(1.06); }
+  100% { transform: scale(1); }
 }
-.animate-bump {
-  animation: bump 0.35s ease-out;
-}
+.animate-bump { animation: bump 0.35s ease-out; }
 
-/* Subtle soft pulse animation for premium effect on cards */
 @keyframes soft-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: brightness(1);
-  }
-  50% {
-    transform: scale(1.02);
-    filter: brightness(1.06);
-  }
+  0%,100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.02); filter: brightness(1.06); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .motion-safe\:animate-soft-pulse {
-    animation: soft-pulse 2s ease-in-out infinite;
-  }
+  .motion-safe\:animate-soft-pulse { animation: soft-pulse 2s ease-in-out infinite; }
 }
 
-/* Winner badge styles with glow and pulse animation */
-
-/* Badge external ring with gradient and soft glow */
+/* Winner badge */
 .winner-badge {
   position: absolute;
   top: -6px;
@@ -175,11 +155,9 @@
   padding: 2px;
   border-radius: 9999px;
   background: conic-gradient(#ffe27a, #ffb400, #ff8a00, #ffe27a);
-  box-shadow: 0 0 6px rgba(255, 180, 0, 0.65), 0 0 14px rgba(255, 138, 0, 0.35);
+  box-shadow: 0 0 6px rgba(255,180,0,0.65), 0 0 14px rgba(255,138,0,0.35);
   animation: winnerPulse 2.4s ease-in-out infinite;
 }
-
-/* Badge core: golden metallic circle */
 .winner-badge__core {
   width: 20px;
   height: 20px;
@@ -191,41 +169,33 @@
   line-height: 1;
   color: #fff;
   border-radius: 9999px;
-  background: linear-gradient(180deg, #ffd36e 0%, #ffb400 55%, #ff8a00 100%);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.15);
+  background: linear-gradient(180deg,#ffd36e,#ffb400 55%,#ff8a00);
 }
-
-/* Extra halo/glow without affecting layout */
 .winner-badge::after {
   content: "";
   position: absolute;
   inset: -4px;
   border-radius: inherit;
-  box-shadow: 0 0 14px rgba(255, 180, 0, 0.35);
-  pointer-events: none;
+  box-shadow: 0 0 14px rgba(255,180,0,0.35);
 }
 
-/* Smooth pulse animation (scale + glow) */
 @keyframes winnerPulse {
   0% {
     transform: scale(1);
-    box-shadow: 0 0 6px rgba(255, 180, 0, 0.65), 0 0 14px rgba(255, 138, 0, 0.35);
+    box-shadow: 0 0 6px rgba(255,180,0,0.65), 0 0 14px rgba(255,138,0,0.35);
   }
   50% {
     transform: scale(1.07);
-    box-shadow: 0 0 10px rgba(255, 180, 0, 0.85), 0 0 18px rgba(255, 138, 0, 0.55);
+    box-shadow: 0 0 10px rgba(255,180,0,0.85), 0 0 18px rgba(255,138,0,0.55);
   }
   100% {
     transform: scale(1);
-    box-shadow: 0 0 6px rgba(255, 180, 0, 0.65), 0 0 14px rgba(255, 138, 0, 0.35);
+    box-shadow: 0 0 6px rgba(255,180,0,0.65), 0 0 14px rgba(255,138,0,0.35);
   }
 }
 
-/* Accessibility: respect users who reduce motion */
 @media (prefers-reduced-motion: reduce) {
-  .winner-badge {
-    animation: none;
-  }
+  .winner-badge { animation: none; }
 }
 
 @layer base {
@@ -245,23 +215,18 @@
   outline-offset: 2px;
 }
 
-img {
-  content-visibility: auto;
-}
+img { content-visibility: auto; }
 
 @media (max-width: 360px) {
-  .hide-on-xs {
-    display: none;
-  }
+  .hide-on-xs { display: none; }
 }
 
+/* 🔥 AJUSTE ESSENCIAL: remove faixa gigante abaixo do header */
 .with-sticky-header .page-content {
-  padding-top: var(--header-h);
+  padding-top: 0;
 }
 
-header {
-  pointer-events: auto;
-}
+header { pointer-events: auto; }
 
 .page-content {
   position: relative;

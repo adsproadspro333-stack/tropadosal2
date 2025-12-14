@@ -66,14 +66,14 @@ const UPSELL_OFFERS: UpsellOffer[] = [
   {
     id: "reforco-2000",
     label: "Reforço Intenso",
-    numbers: 2000,
+    numbers: 100,
     price: 14.9,
     description: "Perfeito pra quem quer dar um salto real nas chances.",
   },
   {
     id: "reforco-3500",
     label: "Modo Blindagem",
-    numbers: 3500,
+    numbers: 200,
     price: 24.9,
     badge: "Mais escolhido",
     description:
@@ -82,7 +82,7 @@ const UPSELL_OFFERS: UpsellOffer[] = [
   {
     id: "reforco-10000",
     label: "Modo Insano",
-    numbers: 10000,
+    numbers: 500,
     price: 49.9,
     badge: "Chance máxima",
     description: "Pra quem quer vir muito forte pra cima nesse sorteio.",

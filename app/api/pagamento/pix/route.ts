@@ -56,7 +56,7 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------
-    // QUANTIDADE REAL DE NÚMEROS
+    // QUANTIDADE REAL DE NÚMEROS (ANTI-BURLO)
     // -------------------------------------------------
     const quantityFromNumbersArray =
       Array.isArray(body.numbers) && body.numbers.length > 0
@@ -64,14 +64,66 @@ export async function POST(req: Request) {
         : 0
 
     const quantityFromBody = Number(body?.quantity) || 0
-    const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0 ? Math.round(totalInCents / UNIT_PRICE_CENTS) : 0
 
-    const effectiveQty =
-      quantityFromNumbersArray ||
-      quantityFromBody ||
-      quantityFromAmount ||
-      MIN_NUMBERS
+    // Quantidade máxima que o VALOR enviado permite,
+    // usando o preço de referência UNIT_PRICE_CENTS.
+    const quantityFromAmount =
+      UNIT_PRICE_CENTS > 0
+        ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
+        : 0
+
+    if (!quantityFromAmount || quantityFromAmount <= 0) {
+      // Se o valor não paga nem 1 número pelo preço de referência,
+      // não deixamos criar pedido "quase de graça".
+      console.warn(
+        "[SEC] Valor muito baixo para gerar quantidade, totalInCents=",
+        totalInCents,
+        "UNIT_PRICE_CENTS=",
+        UNIT_PRICE_CENTS,
+      )
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Valor insuficiente para gerar números válidos.",
+        },
+        { status: 400 },
+      )
+    }
+
+    // 🔐 Regra:
+    // - A quantidade efetiva NUNCA pode ser maior do que quantityFromAmount.
+    // - Se o front mandar uma quantidade maior (ou manipulada), ignoramos.
+    let effectiveQty = quantityFromAmount
+
+    // se veio um array de números explícitos, respeitamos APENAS se couber no valor
+    if (
+      quantityFromNumbersArray > 0 &&
+      quantityFromNumbersArray <= quantityFromAmount
+    ) {
+      effectiveQty = quantityFromNumbersArray
+    }
+
+    // se veio "quantity" no body, também só usamos se for <= ao permitido
+    if (
+      quantityFromBody > 0 &&
+      quantityFromBody <= quantityFromAmount
+    ) {
+      effectiveQty = quantityFromBody
+    }
+
+    // ainda garantimos um mínimo razoável (se você quiser manter esse conceito)
+    if (effectiveQty < MIN_NUMBERS) {
+      // aqui você pode escolher:
+      // - OU força para MIN_NUMBERS (se não quiser menos de 100)
+      // - OU simplesmente deixa como está. Vou só logar para você analisar.
+      console.warn(
+        "[SEC] effectiveQty menor que MIN_NUMBERS:",
+        effectiveQty,
+        "MIN_NUMBERS=",
+        MIN_NUMBERS,
+      )
+      // effectiveQty = MIN_NUMBERS
+    }
 
     const amountInCents = Math.round(totalInCents)
 
@@ -254,34 +306,35 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const data = (resp as any)?.data ?? resp
+    // resp vem formatado pelo nosso lib:
+    // {
+    //   raw,
+    //   transactionId,
+    //   amount,
+    //   status,
+    //   pixCopiaECola,
+    //   qrCodeBase64,
+    //   expiresAt,
+    // }
+    const {
+      raw,
+      transactionId: gwTransactionId,
+      status: gwStatus,
+      pixCopiaECola,
+      qrCodeBase64,
+      expiresAt,
+    } = resp as any
 
-    const pixCopiaECola =
-      (resp as any).pixCopiaECola ||
-      data?.pixCopiaECola ||
-      data?.payload ||
-      ""
-
-    const qrCodeBase64 =
-      (resp as any).qrCodeBase64 ||
-      data?.qrCodeBase64 ||
-      data?.qrCode ||
-      null
-
-    const expiresAt =
-      (resp as any).expiresAt ||
-      data?.expiresAt ||
-      data?.expirationDate ||
-      null
+    const data = raw?.data ?? raw ?? {}
 
     const gatewayId =
-      (resp as any).transactionId ||
+      gwTransactionId ||
       data?.transactionId ||
       data?.id ||
       ""
 
     const transactionStatus =
-      (resp as any).status || data?.status || "pending"
+      gwStatus || data?.status || "pending"
 
     const transaction = await prisma.transaction.create({
       data: {
@@ -289,7 +342,6 @@ export async function POST(req: Request) {
         value: amountInCents / 100,
         status: transactionStatus,
         gatewayId,
-        // 🔹 salva o PIX copia e cola na nova coluna
         pixCopiaCola: pixCopiaECola || null,
       },
     })
