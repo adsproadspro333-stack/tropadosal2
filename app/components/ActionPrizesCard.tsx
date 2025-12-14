@@ -57,7 +57,7 @@ export default function ActionPrizesCard() {
                 mt: 0.2,
               }}
             >
-              Milhares de prêmios entregues nesta ação.
+              Diversos ganhadores em uma única ação.
             </Typography>
           </Box>
 
@@ -78,12 +78,44 @@ export default function ActionPrizesCard() {
             sx={{
               px: 2,
               pb: 1.5,
-              pt: 0.5,
+              pt: 0.8,
               borderTop: "1px solid #e5e7eb",
             }}
           >
+            {/* 🔥 PRÊMIO PRINCIPAL EM DESTAQUE */}
+            <Box
+              sx={{
+                mb: 1.2,
+                p: 1,
+                borderRadius: 1.5,
+                border: "1px solid #FCA5A5",
+                bgcolor: "#FEF2F2",
+              }}
+            >
+              <Typography
+                sx={{
+                  fontSize: "0.7rem",
+                  fontWeight: 700,
+                  color: "#B91C1C",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                }}
+              >
+                Prêmio principal
+              </Typography>
+              <Typography
+                sx={{
+                  fontSize: "0.95rem",
+                  fontWeight: 800,
+                  color: "#7F1D1D",
+                }}
+              >
+                1x Moto BMW GS 1300
+              </Typography>
+            </Box>
+
+            {/* LISTA DE PRÊMIOS */}
             {[
-              "1x Moto BMW GS 1300",
               "10x CG 160 FAN",
               "10x iPhone 17 Pro Max",
               "02x R$ 10.000,00 no PIX",
@@ -98,7 +130,7 @@ export default function ActionPrizesCard() {
                 sx={{
                   fontSize: "0.85rem",
                   color: "#111827",
-                  mb: 0.4,
+                  mb: 0.35,
                   display: "flex",
                   alignItems: "center",
                   gap: 1,
@@ -118,6 +150,18 @@ export default function ActionPrizesCard() {
                 {item}
               </Typography>
             ))}
+
+            {/* MICRO-COPY DE CONVERSÃO */}
+            <Typography
+              sx={{
+                mt: 1,
+                fontSize: "0.75rem",
+                color: "#6B7280",
+              }}
+            >
+              Quanto mais números você escolher,{" "}
+              <strong>maiores são suas chances de ganhar</strong>.
+            </Typography>
           </Box>
         </Collapse>
       </Box>
