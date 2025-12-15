@@ -33,9 +33,9 @@ export async function POST(req: Request) {
 
     const isUpsell = body?.upsell === true
 
-    // -------------------------------
-    // VALOR
-    // -------------------------------
+    // -------------------------------------------------
+    // VALOR TOTAL
+    // -------------------------------------------------
     let totalInCents = Number(body?.totalInCents ?? 0)
 
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
@@ -54,9 +54,9 @@ export async function POST(req: Request) {
       )
     }
 
-    // -------------------------------
+    // -------------------------------------------------
     // ANTI-BURLO POR VALOR
-    // -------------------------------
+    // -------------------------------------------------
     const quantityFromAmount =
       UNIT_PRICE_CENTS > 0
         ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
@@ -88,9 +88,9 @@ export async function POST(req: Request) {
 
     const amountInCents = Math.round(totalInCents)
 
-    // -------------------------------
+    // -------------------------------------------------
     // CLIENTE
-    // -------------------------------
+    // -------------------------------------------------
     const customer = body?.customer || {}
     const documentNumber = String(customer?.documentNumber || "").replace(/\D/g, "")
     const phone = String(customer?.phone || "").replace(/\D/g, "")
@@ -104,15 +104,20 @@ export async function POST(req: Request) {
       )
     }
 
+    // -------------------------------------------------
+    // META EVENT ID
+    // -------------------------------------------------
     const fbEventId = crypto.randomUUID()
 
-    // -------------------------------
-    // USER
-    // -------------------------------
+    // -------------------------------------------------
+    // USER (CPF SEMPRE DOMINANTE)
+    // -------------------------------------------------
     const orConditions: any[] = [{ cpf: documentNumber }]
     if (email) orConditions.push({ email })
 
-    let user = await prisma.user.findFirst({ where: { OR: orConditions } })
+    let user = await prisma.user.findFirst({
+      where: { OR: orConditions },
+    })
 
     if (!user) {
       try {
@@ -130,18 +135,22 @@ export async function POST(req: Request) {
         })
       } catch (err: any) {
         if (err?.code === "P2002") {
-          user = await prisma.user.findFirst({ where: { OR: orConditions } })
+          user = await prisma.user.findFirst({
+            where: { OR: orConditions },
+          })
         } else {
           throw err
         }
       }
     }
 
-    if (!user) throw new Error("Usuário não encontrado")
+    if (!user) {
+      throw new Error("Usuário não encontrado")
+    }
 
-    // -------------------------------
+    // -------------------------------------------------
     // ORDER
-    // -------------------------------
+    // -------------------------------------------------
     const order = await prisma.order.create({
       data: {
         userId: user.id,
@@ -152,29 +161,36 @@ export async function POST(req: Request) {
       },
     })
 
-    // -------------------------------
-    // PUSHCUT
-    // -------------------------------
+    // -------------------------------------------------
+    // PUSHCUT – PEDIDO GERADO
+    // -------------------------------------------------
     if (PUSHCUT_ORDER_CREATED_URL) {
       await sendPushcutNotification(PUSHCUT_ORDER_CREATED_URL, {
-        title: `+1 ( R$ ${(amountInCents / 100).toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
-        text: isUpsell ? "Upsell PIX gerado ⚡" : "Aguardando Pagamento ⚠️",
+        title: `+1 ( R$ ${(amountInCents / 100)
+          .toFixed(2)
+          .replace(".", ",")} ) RF [ P.Z ]`,
+        text: isUpsell
+          ? "Upsell PIX gerado ⚡"
+          : "Aguardando Pagamento ⚠️",
         orderId: order.id,
         amount: amountInCents / 100,
         qty: effectiveQty,
       })
     }
 
-    // -------------------------------
+    // -------------------------------------------------
     // ATIVOPAY
-    // -------------------------------
+    // -------------------------------------------------
     const resp = await createPixTransaction({
       amount: amountInCents,
       customer: {
         name: fullName || "Cliente",
         email: email || "cliente@example.com",
         phone,
-        document: { type: "CPF", number: documentNumber },
+        document: {
+          type: "CPF",
+          number: documentNumber,
+        },
       },
       items: [
         {
@@ -193,20 +209,20 @@ export async function POST(req: Request) {
       pixCopiaECola,
       qrCodeBase64,
       expiresAt,
-      transactionId: gatewayIdFromResp,
+      transactionId: gatewayTransactionId,
       raw,
     } = resp as any
 
     const gatewayId =
-      gatewayIdFromResp ||
+      gatewayTransactionId ||
       raw?.data?.id ||
       raw?.transactionId ||
       ""
 
-    // -------------------------------
-    // 🔥 TRANSACTION (CRÍTICO – RESTAURADO)
-    // -------------------------------
-    await prisma.transaction.create({
+    // -------------------------------------------------
+    // TRANSACTION (CRÍTICO)
+    // -------------------------------------------------
+    const transaction = await prisma.transaction.create({
       data: {
         orderId: order.id,
         value: amountInCents / 100,
@@ -216,15 +232,18 @@ export async function POST(req: Request) {
       },
     })
 
+    // -------------------------------------------------
+    // RESPONSE PARA O FRONT
+    // -------------------------------------------------
     return NextResponse.json(
       {
         ok: true,
         orderId: order.id,
+        transactionId: transaction.id, // 🔥 ESSENCIAL
         pixCopiaECola,
         qrCodeBase64,
         expiresAt,
         fbEventId,
-        redirectTo: "/pagamento",
       },
       { status: 200 },
     )
