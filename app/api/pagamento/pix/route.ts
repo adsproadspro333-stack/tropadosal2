@@ -5,7 +5,6 @@ import { UNIT_PRICE_CENTS } from "@/app/config/pricing"
 import crypto from "crypto"
 import { sendPushcutNotification } from "@/lib/pushcut"
 
-const MIN_NUMBERS = 100
 const PUSHCUT_ORDER_CREATED_URL = process.env.PUSHCUT_ORDER_CREATED_URL
 const isProduction = process.env.NODE_ENV === "production"
 
@@ -32,14 +31,11 @@ export async function POST(req: Request) {
       headers.get("x-forwarded-for") || headers.get("x-real-ip") || ""
     const clientIpAddress = ipHeader.split(",")[0]?.trim() || undefined
 
-    // -------------------------------------------------
-    // 🔥 UPSSELL DETECTION (NOVO – NÃO QUEBRA NADA)
-    // -------------------------------------------------
     const isUpsell = body?.upsell === true
 
-    // -------------------------------------------------
-    // VALOR TOTAL EM CENTAVOS
-    // -------------------------------------------------
+    // -------------------------------
+    // VALOR
+    // -------------------------------
     let totalInCents = Number(body?.totalInCents ?? 0)
 
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
@@ -58,16 +54,9 @@ export async function POST(req: Request) {
       )
     }
 
-    // -------------------------------------------------
-    // QUANTIDADE REAL (ANTI-BURLO – PRESERVADO)
-    // -------------------------------------------------
-    const quantityFromNumbersArray =
-      Array.isArray(body.numbers) && body.numbers.length > 0
-        ? body.numbers.length
-        : 0
-
-    const quantityFromBody = Number(body?.quantity) || 0
-
+    // -------------------------------
+    // ANTI-BURLO POR VALOR
+    // -------------------------------
     const quantityFromAmount =
       UNIT_PRICE_CENTS > 0
         ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
@@ -83,28 +72,25 @@ export async function POST(req: Request) {
     let effectiveQty = quantityFromAmount
 
     if (
-      quantityFromNumbersArray > 0 &&
-      quantityFromNumbersArray <= quantityFromAmount
+      Array.isArray(body.numbers) &&
+      body.numbers.length > 0 &&
+      body.numbers.length <= quantityFromAmount
     ) {
-      effectiveQty = quantityFromNumbersArray
+      effectiveQty = body.numbers.length
     }
 
     if (
-      quantityFromBody > 0 &&
-      quantityFromBody <= quantityFromAmount
+      Number(body?.quantity) > 0 &&
+      Number(body.quantity) <= quantityFromAmount
     ) {
-      effectiveQty = quantityFromBody
-    }
-
-    if (effectiveQty < MIN_NUMBERS && !isUpsell) {
-      console.warn("[SEC] Qty menor que MIN_NUMBERS:", effectiveQty)
+      effectiveQty = Number(body.quantity)
     }
 
     const amountInCents = Math.round(totalInCents)
 
-    // -------------------------------------------------
-    // DADOS DO CLIENTE (INALTERADO)
-    // -------------------------------------------------
+    // -------------------------------
+    // CLIENTE
+    // -------------------------------
     const customer = body?.customer || {}
     const documentNumber = String(customer?.documentNumber || "").replace(/\D/g, "")
     const phone = String(customer?.phone || "").replace(/\D/g, "")
@@ -113,28 +99,23 @@ export async function POST(req: Request) {
 
     if (!documentNumber) {
       return NextResponse.json(
-        { ok: false, error: "CPF/CNPJ obrigatório" },
+        { ok: false, error: "CPF obrigatório" },
         { status: 400 },
       )
     }
 
-    // -------------------------------------------------
-    // META EVENT ID
-    // -------------------------------------------------
     const fbEventId = crypto.randomUUID()
 
-    // -------------------------------------------------
-    // USUÁRIO (COM P2002 PRESERVADO)
-    // -------------------------------------------------
+    // -------------------------------
+    // USER
+    // -------------------------------
     const orConditions: any[] = [{ cpf: documentNumber }]
     if (email) orConditions.push({ email })
 
-    let user = await prisma.user.findFirst({
-      where: { OR: orConditions },
-    })
+    let user = await prisma.user.findFirst({ where: { OR: orConditions } })
 
-    try {
-      if (!user) {
+    if (!user) {
+      try {
         const firstName = fullName?.split(" ")[0] || null
         const lastName = fullName?.split(" ").slice(1).join(" ") || null
 
@@ -147,24 +128,20 @@ export async function POST(req: Request) {
             lastName,
           },
         })
-      }
-    } catch (err: any) {
-      if (err?.code === "P2002") {
-        user = await prisma.user.findFirst({
-          where: { OR: orConditions },
-        })
-      } else {
-        throw err
+      } catch (err: any) {
+        if (err?.code === "P2002") {
+          user = await prisma.user.findFirst({ where: { OR: orConditions } })
+        } else {
+          throw err
+        }
       }
     }
 
-    if (!user) {
-      throw new Error("Usuário não encontrado")
-    }
+    if (!user) throw new Error("Usuário não encontrado")
 
-    // -------------------------------------------------
-    // ORDER (NORMAL OU UPSELL)
-    // -------------------------------------------------
+    // -------------------------------
+    // ORDER
+    // -------------------------------
     const order = await prisma.order.create({
       data: {
         userId: user.id,
@@ -175,9 +152,9 @@ export async function POST(req: Request) {
       },
     })
 
-    // -------------------------------------------------
+    // -------------------------------
     // PUSHCUT
-    // -------------------------------------------------
+    // -------------------------------
     if (PUSHCUT_ORDER_CREATED_URL) {
       await sendPushcutNotification(PUSHCUT_ORDER_CREATED_URL, {
         title: `+1 ( R$ ${(amountInCents / 100).toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
@@ -188,19 +165,16 @@ export async function POST(req: Request) {
       })
     }
 
-    // -------------------------------------------------
+    // -------------------------------
     // ATIVOPAY
-    // -------------------------------------------------
+    // -------------------------------
     const resp = await createPixTransaction({
       amount: amountInCents,
       customer: {
         name: fullName || "Cliente",
         email: email || "cliente@example.com",
         phone,
-        document: {
-          type: "CPF",
-          number: documentNumber,
-        },
+        document: { type: "CPF", number: documentNumber },
       },
       items: [
         {
@@ -215,15 +189,8 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const {
-      pixCopiaECola,
-      qrCodeBase64,
-      expiresAt,
-    } = resp as any
+    const { pixCopiaECola, qrCodeBase64, expiresAt } = resp as any
 
-    // -------------------------------------------------
-    // RESPOSTA FINAL
-    // -------------------------------------------------
     return NextResponse.json(
       {
         ok: true,
@@ -237,7 +204,7 @@ export async function POST(req: Request) {
       { status: 200 },
     )
   } catch (err) {
-    console.error("ERRO /api/pagamento:", err)
+    console.error("ERRO /api/pagamento/pix:", err)
     return NextResponse.json(
       { ok: false, error: "Erro ao processar pagamento" },
       { status: 500 },
