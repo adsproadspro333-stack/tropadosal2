@@ -14,8 +14,8 @@ export default function HeaderBar() {
         top: 0,
         zIndex: 50,
         width: "100%",
-        backgroundColor: "#0B0B0B", // 🔥 header preta premium
-        boxShadow: "0 2px 8px rgba(0,0,0,0.55)", // separação mais forte
+        background: "linear-gradient(180deg, #0B0B0B 0%, #050505 100%)",
+        boxShadow: "0 3px 12px rgba(0,0,0,0.65)",
       }}
     >
       <div
@@ -26,7 +26,7 @@ export default function HeaderBar() {
           justifyContent: "center",
         }}
       >
-        {/* miolo 480px */}
+        {/* miolo fixo */}
         <div
           style={{
             width: "100%",
@@ -35,7 +35,6 @@ export default function HeaderBar() {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 8,
           }}
         >
           {/* LOGO */}
@@ -45,7 +44,7 @@ export default function HeaderBar() {
             style={{
               display: "flex",
               alignItems: "center",
-              justifyContent: "flex-start",
+              gap: 8,
               flex: 1,
             }}
           >
@@ -58,10 +57,11 @@ export default function HeaderBar() {
                 priority
                 sizes="(max-width: 640px) 180px, 260px"
                 style={{
-                  height: 48,
+                  height: 46,
                   width: "auto",
                   objectFit: "contain",
-                  filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.6))",
+                  filter:
+                    "drop-shadow(0 2px 6px rgba(0,0,0,0.85))",
                 }}
                 onError={() => setImgOk(false)}
               />
@@ -70,7 +70,7 @@ export default function HeaderBar() {
                 style={{
                   fontSize: 18,
                   color: "#FFFFFF",
-                  whiteSpace: "nowrap",
+                  letterSpacing: 0.6,
                 }}
               >
                 FAVELA PRÊMIOS
@@ -90,22 +90,34 @@ export default function HeaderBar() {
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 6,
-                border: "2px solid #D4AF37",
-                color: "#F5D76E",
-                background: "rgba(212,175,55,0.08)", // fundo sutil
-                padding: "6px 12px",
+                padding: "7px 14px",
                 borderRadius: 999,
-                fontWeight: 600,
+                border: "2px solid #D4AF37",
+                background:
+                  "linear-gradient(180deg, rgba(212,175,55,0.18), rgba(212,175,55,0.06))",
+                color: "#F5D76E",
                 fontSize: 12,
-                lineHeight: 1,
+                fontWeight: 700,
                 cursor: "pointer",
-                transition: "all 0.15s ease",
+                transition: "transform .15s ease, box-shadow .15s ease",
+                boxShadow:
+                  "0 0 0 rgba(212,175,55,0)",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(212,175,55,0.18)"
+                e.currentTarget.style.transform = "scale(1.05)"
+                e.currentTarget.style.boxShadow =
+                  "0 0 12px rgba(212,175,55,0.45)"
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(212,175,55,0.08)"
+                e.currentTarget.style.transform = "scale(1)"
+                e.currentTarget.style.boxShadow =
+                  "0 0 0 rgba(212,175,55,0)"
+              }}
+              onMouseDown={(e) => {
+                e.currentTarget.style.transform = "scale(0.96)"
+              }}
+              onMouseUp={(e) => {
+                e.currentTarget.style.transform = "scale(1.05)"
               }}
             >
               <svg
@@ -126,7 +138,7 @@ export default function HeaderBar() {
                   strokeWidth="2"
                 />
               </svg>
-              <span className="hide-on-xs">Minhas compras</span>
+              <span>Minhas compras</span>
             </button>
           </Link>
         </div>

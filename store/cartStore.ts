@@ -1,38 +1,38 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-// 🎯 Regras de preço base (personalizado)
-// Agora o mínimo conceitual passa a ser 3 números por R$ 9,90
+// 🎯 Regras de preço base
 const BASE_MIN_QTY = 3
 const BASE_MIN_PRICE_CENTS = 990 // 3 números = R$ 9,90
-const UNIT_PRICE = BASE_MIN_PRICE_CENTS / BASE_MIN_QTY // preço médio por número
+const UNIT_PRICE = BASE_MIN_PRICE_CENTS / BASE_MIN_QTY
 
-// 🎯 Combo padrão da home (3 / 9,90)
+// 🎯 Combo padrão
 const DEFAULT_COMBO_QTY = 5
 const DEFAULT_COMBO_PRICE_CENTS = 1990
 
 export type CartState = {
-  // Núcleo do pedido (home)
+  // Núcleo do pedido
   baseQty: number
   baseAmountInCents: number
   comboQty: number
   combosTotalInCents: number
 
-  // 🔥 Order bump da página /confirmacao
+  // Order bump
   bumpQty: number
   bumpAmountInCents: number
 
-  // Totais finais (o que vai pro banco / payment)
+  // Totais finais
   qty: number
   totalInCents: number
+
+  // 🔥 CONTROLE DE FLUXO
+  isUpsell: boolean
 
   setBaseQty: (n: number) => void
   handleChangeQuantity: (newTotalQty: number) => void
   addComboToCart: (quantity: number, priceCents: number) => void
   clearCart: () => void
   prepareUpsellOrder: (quantity: number, priceCents: number) => void
-
-  // 👉 NOVO: controle do order bump
   addOrderBump: (quantity: number, priceCents: number) => void
   removeOrderBump: () => void
 }
@@ -40,21 +40,21 @@ export type CartState = {
 export const useCartStore = create<CartState>()(
   persist(
     (set) => ({
-      // 🟢 Começa com o combo padrão já selecionado (3 / 9,90)
+      // 🟢 Estado inicial
       baseQty: 0,
       baseAmountInCents: 0,
       comboQty: DEFAULT_COMBO_QTY,
       combosTotalInCents: DEFAULT_COMBO_PRICE_CENTS,
 
-      // 🔥 Order bump começa zerado
       bumpQty: 0,
       bumpAmountInCents: 0,
 
-      // Totais
       qty: DEFAULT_COMBO_QTY,
       totalInCents: DEFAULT_COMBO_PRICE_CENTS,
 
-      // Ajusta SOMENTE a parte personalizada (baseQty)
+      isUpsell: false,
+
+      // Ajusta apenas a parte personalizada
       setBaseQty: (n: number) => {
         const newBaseQty = Math.max(0, Math.floor(Number(n) || 0))
 
@@ -75,13 +75,10 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // Controla o TOTAL “visível” (combo + personalizado)
-      // 🔹 O order bump é extra e sempre SOMA por fora.
+      // Controla quantidade total visível
       handleChangeQuantity: (newTotalQty: number) => {
         set((state) => {
           const rawTarget = Math.floor(Number(newTotalQty) || 0)
-
-          // mínimo sempre é o combo já escolhido
           const coreTarget = Math.max(state.comboQty, rawTarget)
 
           const newBaseQty = Math.max(0, coreTarget - state.comboQty)
@@ -101,13 +98,14 @@ export const useCartStore = create<CartState>()(
         })
       },
 
-      // 🔴 Combo agora SUBSTITUI o combo anterior (não soma mais)
+      // 🔴 Combo substitui combo anterior
       addComboToCart: (quantity: number, priceCents: number) => {
         set((state) => {
           const comboQty = quantity
           const combosTotalInCents = priceCents
-          const coreQty = state.baseQty + comboQty
-          const totalQty = coreQty + state.bumpQty
+
+          const totalQty =
+            state.baseQty + comboQty + state.bumpQty
 
           return {
             comboQty,
@@ -117,11 +115,12 @@ export const useCartStore = create<CartState>()(
               state.baseAmountInCents +
               combosTotalInCents +
               state.bumpAmountInCents,
+            isUpsell: false,
           }
         })
       },
 
-      // "Limpar" volta pro estado padrão: 3 / 9,90 (sem bump)
+      // 🔄 Reset total
       clearCart: () => {
         set({
           baseQty: 0,
@@ -132,54 +131,44 @@ export const useCartStore = create<CartState>()(
           bumpAmountInCents: 0,
           qty: DEFAULT_COMBO_QTY,
           totalInCents: DEFAULT_COMBO_PRICE_CENTS,
+          isUpsell: false,
         })
       },
 
-      // 🔥 Upsell (reforço) – monta um NOVO pedido só com o pacote
-      // (usado quando vem de /compras?reforco=...)
+      // 🔥 UPSell pós-pagamento
       prepareUpsellOrder: (quantity: number, priceCents: number) => {
-        set(() => {
-          const baseQty = 0
-          const baseAmountInCents = 0
-          const comboQty = quantity
-          const combosTotalInCents = priceCents
-
-          // Upsell é um pedido “limpo”: sem bump junto
-          return {
-            baseQty,
-            baseAmountInCents,
-            comboQty,
-            combosTotalInCents,
-            bumpQty: 0,
-            bumpAmountInCents: 0,
-            qty: comboQty,
-            totalInCents: combosTotalInCents,
-          }
-        })
+        set(() => ({
+          baseQty: 0,
+          baseAmountInCents: 0,
+          comboQty: quantity,
+          combosTotalInCents: priceCents,
+          bumpQty: 0,
+          bumpAmountInCents: 0,
+          qty: quantity,
+          totalInCents: priceCents,
+          isUpsell: true, // 🔥 FLAG CRÍTICA
+        }))
       },
 
-      // ✅ Order Bump: soma +2000 números e +R$ 9,90 ao pedido
+      // ➕ Order bump
       addOrderBump: (quantity: number, priceCents: number) => {
         set((state) => {
-          const bumpQty = quantity
-          const bumpAmountInCents = priceCents
-
           const totalQty =
-            state.baseQty + state.comboQty + bumpQty
+            state.baseQty + state.comboQty + quantity
 
           return {
-            bumpQty,
-            bumpAmountInCents,
+            bumpQty: quantity,
+            bumpAmountInCents: priceCents,
             qty: totalQty,
             totalInCents:
               state.baseAmountInCents +
               state.combosTotalInCents +
-              bumpAmountInCents,
+              priceCents,
           }
         })
       },
 
-      // Remover bump (se algum dia quiser permitir isso)
+      // ➖ Remove bump
       removeOrderBump: () => {
         set((state) => {
           const totalQty = state.baseQty + state.comboQty
