@@ -189,7 +189,32 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const { pixCopiaECola, qrCodeBase64, expiresAt } = resp as any
+    const {
+      pixCopiaECola,
+      qrCodeBase64,
+      expiresAt,
+      transactionId: gatewayIdFromResp,
+      raw,
+    } = resp as any
+
+    const gatewayId =
+      gatewayIdFromResp ||
+      raw?.data?.id ||
+      raw?.transactionId ||
+      ""
+
+    // -------------------------------
+    // 🔥 TRANSACTION (CRÍTICO – RESTAURADO)
+    // -------------------------------
+    await prisma.transaction.create({
+      data: {
+        orderId: order.id,
+        value: amountInCents / 100,
+        status: "pending",
+        gatewayId,
+        pixCopiaCola: pixCopiaECola || null,
+      },
+    })
 
     return NextResponse.json(
       {
