@@ -538,6 +538,47 @@ export default function HomePage() {
             </Stack>
           </Paper>
 
+          {/* ✅ Progresso de vendas (MOVIDO PARA CIMA: agora vem ANTES de Ganhadores recentes) */}
+          <Paper
+            elevation={0}
+            sx={{
+              mb: 2,
+              p: 1.8,
+              borderRadius: 3,
+              bgcolor: GLASS,
+              border: `1px solid ${BORDER}`,
+              backdropFilter: "blur(10px)",
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              sx={{
+                fontWeight: 900,
+                mb: 0.8,
+                fontSize: "1.0rem",
+                color: "#fff",
+              }}
+            >
+              Progresso de vendas
+            </Typography>
+
+            <SalesProgress percent={76.3} />
+
+            <Typography
+              variant="caption"
+              sx={{
+                mt: 1,
+                display: "block",
+                fontSize: "0.78rem",
+                color: MUTED,
+              }}
+            >
+              Restam apenas{" "}
+              <strong style={{ color: "#fff" }}>1,9% dos títulos disponíveis</strong>.
+              Garanta sua participação enquanto ainda há números liberados.
+            </Typography>
+          </Paper>
+
           {/* Ganhadores recentes */}
           <Paper
             elevation={0}
@@ -573,47 +614,6 @@ export default function HomePage() {
             </Typography>
 
             <WinnersList initialCount={4} />
-          </Paper>
-
-          {/* Progresso de vendas */}
-          <Paper
-            elevation={0}
-            sx={{
-              mb: 3,
-              p: 1.8,
-              borderRadius: 3,
-              bgcolor: GLASS,
-              border: `1px solid ${BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <Typography
-              variant="subtitle1"
-              sx={{
-                fontWeight: 900,
-                mb: 0.8,
-                fontSize: "1.0rem",
-                color: "#fff",
-              }}
-            >
-              Progresso de vendas
-            </Typography>
-
-            <SalesProgress percent={76.3} />
-
-            <Typography
-              variant="caption"
-              sx={{
-                mt: 1,
-                display: "block",
-                fontSize: "0.78rem",
-                color: MUTED,
-              }}
-            >
-              Restam apenas{" "}
-              <strong style={{ color: "#fff" }}>1,9% dos títulos disponíveis</strong>.
-              Garanta sua participação enquanto ainda há números liberados.
-            </Typography>
           </Paper>
 
           <FooterLegal />
