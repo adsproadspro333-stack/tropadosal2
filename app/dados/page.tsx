@@ -17,17 +17,13 @@ import {
 import { Icon } from "@iconify/react"
 import { useCartStore } from "@/store/cartStore"
 
-const EMAIL_DOMAINS = [
-  "gmail.com",
-  "hotmail.com",
-  "outlook.com",
-  "icloud.com",
-  "yahoo.com",
-]
+const EMAIL_DOMAINS = ["gmail.com", "hotmail.com", "outlook.com", "icloud.com", "yahoo.com"]
 
 export default function DadosPage() {
   const router = useRouter()
-  const { qty, total } = useCartStore()
+
+  // ✅ CORREÇÃO CRÍTICA: no store é totalInCents (não existe "total")
+  const { qty, totalInCents } = useCartStore()
 
   const [cpf, setCpf] = useState("")
   const [nome, setNome] = useState("")
@@ -36,39 +32,35 @@ export default function DadosPage() {
   const [birthdate, setBirthdate] = useState("")
   const [error, setError] = useState("")
   const [autoFillMessage, setAutoFillMessage] = useState("")
-  const [autoFillCheckedCpf, setAutoFillCheckedCpf] = useState<string | null>(
-    null,
-  )
+  const [autoFillCheckedCpf, setAutoFillCheckedCpf] = useState<string | null>(null)
+
+  // ✅ Anti-fluxo quebrado: se cair aqui sem carrinho, manda pra home
+  useEffect(() => {
+    if (!qty || qty <= 0 || !totalInCents || totalInCents <= 0) {
+      router.replace("/")
+    }
+  }, [qty, totalInCents, router])
 
   // Formatadores simples
   const formatCPF = (value: string) => {
     const numbers = value.replace(/\D/g, "").slice(0, 11)
     if (numbers.length <= 3) return numbers
-    if (numbers.length <= 6)
-      return `${numbers.slice(0, 3)}.${numbers.slice(3)}`
-    if (numbers.length <= 9)
-      return `${numbers.slice(0, 3)}.${numbers.slice(3, 6)}.${numbers.slice(
-        6,
-      )}`
-    return `${numbers.slice(0, 3)}.${numbers.slice(3, 6)}.${numbers.slice(
-      6,
-      9,
-    )}-${numbers.slice(9)}`
+    if (numbers.length <= 6) return `${numbers.slice(0, 3)}.${numbers.slice(3)}`
+    if (numbers.length <= 9) return `${numbers.slice(0, 3)}.${numbers.slice(3, 6)}.${numbers.slice(6)}`
+    return `${numbers.slice(0, 3)}.${numbers.slice(3, 6)}.${numbers.slice(6, 9)}-${numbers.slice(9)}`
   }
 
   const formatPhone = (value: string) => {
     const numbers = value.replace(/\D/g, "").slice(0, 11)
     if (numbers.length <= 2) return numbers
-    if (numbers.length <= 7)
-      return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`
+    if (numbers.length <= 7) return `(${numbers.slice(0, 2)}) ${numbers.slice(2)}`
     return `(${numbers.slice(0, 2)}) ${numbers.slice(2, 7)}-${numbers.slice(7)}`
   }
 
   const formatDate = (value: string) => {
     const numbers = value.replace(/\D/g, "").slice(0, 8)
     if (numbers.length <= 2) return numbers
-    if (numbers.length <= 4)
-      return `${numbers.slice(0, 2)}/${numbers.slice(2)}`
+    if (numbers.length <= 4) return `${numbers.slice(0, 2)}/${numbers.slice(2)}`
     return `${numbers.slice(0, 2)}/${numbers.slice(2, 4)}/${numbers.slice(4)}`
   }
 
@@ -103,12 +95,28 @@ export default function DadosPage() {
     setAutoFillMessage("")
 
     if (!validateForm()) return
+    if (typeof window === "undefined") return
+
+    // ✅ Sanitização forte (evita salvar "undefined"/NaN e quebrar confirmação)
+    const safeQty = Number.isFinite(Number(qty)) ? Math.max(0, Number(qty)) : 0
+    const safeTotalInCents = Number.isFinite(Number(totalInCents))
+      ? Math.max(0, Number(totalInCents))
+      : 0
+
+    if (!safeQty || safeQty <= 0 || !safeTotalInCents || safeTotalInCents <= 0) {
+      setError("Seu carrinho está vazio. Volte e selecione os números novamente.")
+      return
+    }
 
     const payload = { cpf, nome, email, phone, birthdate }
-
     localStorage.setItem("checkoutCustomer", JSON.stringify(payload))
-    localStorage.setItem("checkoutQuantity", String(qty))
-    localStorage.setItem("checkoutTotal", String(total))
+
+    // ✅ compat: mantém chaves antigas + novas
+    localStorage.setItem("checkoutQuantity", String(safeQty))
+    // antigo (em reais)
+    localStorage.setItem("checkoutTotal", String((safeTotalInCents / 100).toFixed(2)))
+    // novo (em centavos)
+    localStorage.setItem("checkoutTotalInCents", String(safeTotalInCents))
 
     router.push("/confirmacao")
   }
@@ -123,7 +131,6 @@ export default function DadosPage() {
       return
     }
 
-    // evita ficar checando o mesmo CPF toda hora
     if (autoFillCheckedCpf === cleanCpf) return
 
     try {
@@ -149,9 +156,7 @@ export default function DadosPage() {
         if (data.phone) setPhone(data.phone)
         if (data.birthdate) setBirthdate(data.birthdate)
 
-        setAutoFillMessage(
-          "Encontramos seus dados da sua última participação e preenchemos automaticamente.",
-        )
+        setAutoFillMessage("Encontramos seus dados da sua última participação e preenchemos automaticamente.")
       } else {
         setAutoFillMessage("")
       }
@@ -164,12 +169,11 @@ export default function DadosPage() {
     }
   }, [cpf, autoFillCheckedCpf])
 
-  // 🔎 lógica de sugestões de e-mail
+  // 🔎 sugestões de e-mail
   const emailTrimmed = email.trim()
   const [userPart, domainPart] = emailTrimmed.split("@")
   const hasAt = emailTrimmed.includes("@")
-  const showEmailSuggestions =
-    !!userPart && !emailTrimmed.includes(" ") && userPart.length >= 2
+  const showEmailSuggestions = !!userPart && !emailTrimmed.includes(" ") && userPart.length >= 2
 
   const filteredDomains = EMAIL_DOMAINS.filter((d) => {
     if (!hasAt) return true
@@ -178,19 +182,30 @@ export default function DadosPage() {
     return d.startsWith(fragment)
   })
 
-  const emailSuggestions = showEmailSuggestions
-    ? filteredDomains.map((d) => `${userPart}@${d}`)
-    : []
+  const emailSuggestions = showEmailSuggestions ? filteredDomains.map((d) => `${userPart}@${d}`) : []
+
+  // ---------- TOKENS VISUAIS (alinhado com / e /pagamento) ----------
+  const BG = "#0B0F19"
+  const GLASS = "rgba(255,255,255,0.06)"
+  const GLASS_SOFT = "rgba(255,255,255,0.04)"
+  const BORDER = "rgba(255,255,255,0.10)"
+  const TXT = "rgba(255,255,255,0.92)"
+  const MUTED = "rgba(255,255,255,0.68)"
+  const GREEN = "#22C55E"
+  const GREEN_DARK = "#16A34A"
+  const RED = "#DC2626"
 
   return (
     <Box
       sx={{
-        bgcolor: "background.default",
         minHeight: "100vh",
+        bgcolor: BG,
         display: "flex",
         justifyContent: "center",
         alignItems: { xs: "center", sm: "flex-start" },
         px: { xs: 1.5, sm: 0 },
+        backgroundImage:
+          "radial-gradient(1200px 600px at 20% 10%, rgba(34,197,94,0.14), transparent 60%), radial-gradient(900px 500px at 90% 0%, rgba(220,38,38,0.10), transparent 55%)",
       }}
     >
       <Container
@@ -202,71 +217,52 @@ export default function DadosPage() {
         }}
       >
         <Paper
-          elevation={3}
+          elevation={0}
           sx={{
-            p: { xs: 2.5, sm: 4 },
-            borderRadius: 3,
             width: "100%",
+            p: { xs: 2.2, sm: 3.2 },
+            borderRadius: 3,
+            bgcolor: GLASS,
+            border: `1px solid ${BORDER}`,
+            backdropFilter: "blur(10px)",
+            boxShadow: "0 18px 42px rgba(0,0,0,0.38)",
           }}
         >
           {/* Header */}
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1.5,
-              mb: 1.5,
-            }}
-          >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1.5 }}>
             <Box
               sx={{
-                width: 40,
-                height: 40,
+                width: 42,
+                height: 42,
                 borderRadius: "50%",
-                bgcolor: "success.light",
+                bgcolor: "rgba(34,197,94,0.14)",
+                border: "1px solid rgba(34,197,94,0.28)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                boxShadow: "0 10px 22px rgba(34,197,94,0.12)",
               }}
             >
-              <Icon
-                icon="mdi:account-circle"
-                width={24}
-                style={{ color: "#16a34a" }}
-              />
+              <Icon icon="mdi:account-circle" width={24} style={{ color: GREEN }} />
             </Box>
 
             <Box>
-              <Typography
-                variant="h6"
-                fontWeight={700}
-                sx={{ lineHeight: 1.1 }}
-              >
+              <Typography variant="h6" fontWeight={900} sx={{ lineHeight: 1.1, color: "#fff" }}>
                 Dados pessoais
               </Typography>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mt: 0.3 }}
-              >
+              <Typography variant="body2" sx={{ mt: 0.35, color: MUTED, fontSize: "0.84rem" }}>
                 Preencha seus dados para continuar com a compra.
               </Typography>
             </Box>
           </Box>
 
           {/* Barra de progresso */}
-          <Box sx={{ mb: 2.5 }}>
-            <Box
-              sx={{
-                display: "flex",
-                justifyContent: "space-between",
-                mb: 0.5,
-              }}
-            >
-              <Typography variant="caption" color="text.secondary">
+          <Box sx={{ mb: 2.2 }}>
+            <Box sx={{ display: "flex", justifyContent: "space-between", mb: 0.5 }}>
+              <Typography variant="caption" sx={{ color: MUTED }}>
                 Etapa 2 de 3
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" sx={{ color: MUTED }}>
                 Método de pagamento é a próxima
               </Typography>
             </Box>
@@ -274,12 +270,12 @@ export default function DadosPage() {
               variant="determinate"
               value={66}
               sx={{
-                height: 6,
+                height: 7,
                 borderRadius: 999,
-                bgcolor: "#E5E7EB",
+                bgcolor: "rgba(255,255,255,0.10)",
                 "& .MuiLinearProgress-bar": {
                   borderRadius: 999,
-                  bgcolor: "#16A34A",
+                  bgcolor: GREEN,
                 },
               }}
             />
@@ -288,34 +284,55 @@ export default function DadosPage() {
           {/* Resumo do pedido */}
           <Box
             sx={{
-              mb: 2.5,
-              p: 1.5,
-              borderRadius: 2,
-              bgcolor: "#F9FAFB",
-              border: "1px dashed #D1D5DB",
+              mb: 2.2,
+              p: 1.4,
+              borderRadius: 2.5,
+              bgcolor: GLASS_SOFT,
+              border: `1px dashed ${BORDER}`,
             }}
           >
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mb: 0.3 }}
-            >
+            <Typography sx={{ display: "block", mb: 0.3, fontSize: "0.74rem", color: MUTED }}>
               Seu pedido até aqui:
             </Typography>
-            <Typography variant="body2" fontWeight={600}>
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem" }}>
               {qty} números selecionados na etapa anterior.
             </Typography>
           </Box>
 
           {/* Mensagem de autofill */}
           {autoFillMessage && !error && (
-            <Alert severity="info" sx={{ mb: 2 }}>
+            <Alert
+              severity="info"
+              sx={{
+                mb: 2,
+                bgcolor: "rgba(59,130,246,0.10)",
+                border: "1px solid rgba(59,130,246,0.20)",
+                color: TXT,
+                "& .MuiAlert-icon": { color: "rgba(59,130,246,0.9)" },
+              }}
+            >
               {autoFillMessage}
             </Alert>
           )}
 
-          {/* Formulário */}
-          <Box component="form" onSubmit={handleSubmit}>
+          {/* Form */}
+          <Box
+            component="form"
+            onSubmit={handleSubmit}
+            sx={{
+              "& .MuiInputLabel-root": { color: MUTED },
+              "& .MuiInputLabel-root.Mui-focused": { color: "#fff" },
+              "& .MuiOutlinedInput-root": {
+                bgcolor: "rgba(255,255,255,0.04)",
+                borderRadius: 2.5,
+                color: "#fff",
+                "& fieldset": { borderColor: BORDER },
+                "&:hover fieldset": { borderColor: "rgba(255,255,255,0.18)" },
+                "&.Mui-focused fieldset": { borderColor: "rgba(34,197,94,0.55)" },
+              },
+              "& .MuiFormHelperText-root": { color: MUTED },
+            }}
+          >
             <TextField
               label="CPF *"
               value={cpf}
@@ -341,7 +358,7 @@ export default function DadosPage() {
               placeholder="Seu nome completo"
             />
 
-            <Box sx={{ mt: 1 }}>
+            <Box sx={{ mt: 0.5 }}>
               <TextField
                 label="Email *"
                 type="email"
@@ -357,16 +374,8 @@ export default function DadosPage() {
                 placeholder="seu@email.com"
               />
 
-              {/* sugestões de e-mail */}
               {emailSuggestions.length > 0 && (
-                <Box
-                  sx={{
-                    mt: 0.5,
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 0.5,
-                  }}
-                >
+                <Box sx={{ mt: 0.6, display: "flex", flexWrap: "wrap", gap: 0.6 }}>
                   {emailSuggestions.map((suggestion) => (
                     <Button
                       key={suggestion}
@@ -377,12 +386,13 @@ export default function DadosPage() {
                       sx={{
                         textTransform: "none",
                         borderRadius: 999,
-                        fontSize: "0.75rem",
+                        fontSize: "0.78rem",
                         px: 1.2,
-                        py: 0.2,
-                        borderColor: "#E5E7EB",
-                        color: "#4B5563",
-                        bgcolor: "#FFFFFF",
+                        py: 0.25,
+                        borderColor: "rgba(255,255,255,0.16)",
+                        color: "rgba(255,255,255,0.82)",
+                        bgcolor: "rgba(255,255,255,0.04)",
+                        "&:hover": { bgcolor: "rgba(255,255,255,0.06)" },
                       }}
                     >
                       {suggestion}
@@ -415,7 +425,16 @@ export default function DadosPage() {
             />
 
             {error && (
-              <Alert severity="error" sx={{ mt: 2 }}>
+              <Alert
+                severity="error"
+                sx={{
+                  mt: 2,
+                  bgcolor: "rgba(220,38,38,0.12)",
+                  border: "1px solid rgba(220,38,38,0.22)",
+                  color: TXT,
+                  "& .MuiAlert-icon": { color: RED },
+                }}
+              >
                 {error}
               </Alert>
             )}
@@ -423,15 +442,18 @@ export default function DadosPage() {
             <Button
               type="submit"
               variant="contained"
-              color="success"
               size="large"
               fullWidth
               sx={{
                 mt: 3,
-                py: 1.4,
-                fontWeight: 700,
+                py: 1.35,
+                fontWeight: 1000,
                 borderRadius: 999,
                 textTransform: "none",
+                bgcolor: GREEN,
+                color: "#0B0F19",
+                boxShadow: "0px 14px 30px rgba(34,197,94,0.22)",
+                "&:hover": { bgcolor: GREEN_DARK },
               }}
               endIcon={<Icon icon="mdi:arrow-right" width={22} />}
             >
@@ -444,7 +466,9 @@ export default function DadosPage() {
               sx={{
                 mt: 1.2,
                 textTransform: "none",
-                fontSize: "0.85rem",
+                fontSize: "0.86rem",
+                color: "rgba(255,255,255,0.70)",
+                "&:hover": { bgcolor: "rgba(255,255,255,0.04)" },
               }}
               onClick={() => router.push("/")}
             >

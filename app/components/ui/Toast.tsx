@@ -107,7 +107,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useToast() {
-  const ctx = useContext(ToastCtx)
-  if (!ctx) throw new Error("useToast must be used inside <ToastProvider>")
-  return ctx
+  return {
+    show: () => {
+      // ❌ toast desativado globalmente
+      return
+    },
+  }
 }
+

@@ -20,6 +20,7 @@ import {
   Stack,
   LinearProgress,
   IconButton,
+  Divider,
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 import QRCode from "react-qr-code"
@@ -63,6 +64,10 @@ export default function PagamentoPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // UI state (não mexe na lógica)
+  const [manualChecking, setManualChecking] = useState(false)
+  const paidRedirectedRef = useRef(false)
+
   // 1) Se tiver orderId na URL, tenta carregar do backend
   useEffect(() => {
     const loadOrderData = async () => {
@@ -103,12 +108,7 @@ export default function PagamentoPage() {
       return
     }
 
-    if (
-      !resolved.qty ||
-      resolved.qty <= 0 ||
-      !resolved.amount ||
-      resolved.amount <= 0
-    ) {
+    if (!resolved.qty || resolved.qty <= 0 || !resolved.amount || resolved.amount <= 0) {
       return
     }
 
@@ -141,8 +141,6 @@ export default function PagamentoPage() {
         const data = await response.json()
 
         if (!response.ok || data.error) {
-          // aqui vai cair o safeMessage da rota:
-          // "Erro ao processar o pagamento. Tente novamente em instantes."
           throw new Error(data.error || "Falha ao gerar PIX")
         }
 
@@ -203,9 +201,7 @@ export default function PagamentoPage() {
         setTimeRemaining("00:00")
       } else {
         setTimeRemaining(
-          `${minutes.toString().padStart(2, "0")}:${seconds
-            .toString()
-            .padStart(2, "0")}`,
+          `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`,
         )
       }
     }, 1000)
@@ -213,52 +209,58 @@ export default function PagamentoPage() {
     return () => clearInterval(interval)
   }, [router, resolved.qty, resolved.amount, orderIdFromUrl])
 
+  // helper: checa pagamento (usado pelo auto-check e pelo botão "Já paguei")
+  const checkPaymentStatusOnce = async () => {
+    if (!transactionId) return
+    if (paidRedirectedRef.current) return
+
+    const res = await fetch(`/api/transaction-status?id=${transactionId}`)
+    if (!res.ok) return
+    const data = await res.json()
+
+    if (data.status === "paid") {
+      paidRedirectedRef.current = true
+
+      let finalOrderId: string | null = data.orderId || orderId || null
+
+      if (!finalOrderId && typeof window !== "undefined") {
+        finalOrderId =
+          localStorage.getItem("lastOrderId") ||
+          localStorage.getItem("lastPaidOrderId") ||
+          null
+      }
+
+      if (finalOrderId && typeof window !== "undefined") {
+        localStorage.setItem("lastPaidOrderId", String(finalOrderId))
+      }
+
+      if (finalOrderId) {
+        router.push(`/pagamento-confirmado?orderId=${finalOrderId}`)
+      } else {
+        router.push("/pagamento-confirmado")
+      }
+    }
+  }
+
   // 3) Checa no backend se a transação foi paga e redireciona
   useEffect(() => {
     if (!transactionId) return
 
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/transaction-status?id=${transactionId}`)
-        if (!res.ok) return
-
-        const data = await res.json()
-
-        if (data.status === "paid") {
-          clearInterval(interval)
-
-          let finalOrderId: string | null = data.orderId || orderId || null
-
-          if (!finalOrderId && typeof window !== "undefined") {
-            finalOrderId =
-              localStorage.getItem("lastOrderId") ||
-              localStorage.getItem("lastPaidOrderId") ||
-              null
-          }
-
-          if (finalOrderId && typeof window !== "undefined") {
-            localStorage.setItem("lastPaidOrderId", String(finalOrderId))
-          }
-
-          if (finalOrderId) {
-            router.push(`/pagamento-confirmado?orderId=${finalOrderId}`)
-          } else {
-            router.push("/pagamento-confirmado")
-          }
-        }
+        await checkPaymentStatusOnce()
       } catch (err) {
         console.error("Erro ao checar status da transação:", err)
       }
     }, 5000)
 
     return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionId, router, orderId])
 
   const handleCopyPixCode = async () => {
     if (!pixPayload) {
-      setSnackbarMessage(
-        "Ainda estamos gerando o código PIX, aguarde alguns segundos.",
-      )
+      setSnackbarMessage("Ainda estamos gerando o código PIX, aguarde alguns segundos.")
       setSnackbarSeverity("error")
       setSnackbarOpen(true)
       return
@@ -279,9 +281,7 @@ export default function PagamentoPage() {
 
   const handleOpenQRCode = () => {
     if (!pixPayload) {
-      setSnackbarMessage(
-        "Ainda estamos gerando o QR Code, aguarde alguns segundos.",
-      )
+      setSnackbarMessage("Ainda estamos gerando o QR Code, aguarde alguns segundos.")
       setSnackbarSeverity("error")
       setSnackbarOpen(true)
       return
@@ -293,112 +293,133 @@ export default function PagamentoPage() {
     setQrCodeDialogOpen(false)
   }
 
+  const handleIAlreadyPaid = async () => {
+    if (!transactionId) {
+      setSnackbarMessage("Ainda estamos gerando o pagamento. Aguarde alguns segundos.")
+      setSnackbarSeverity("error")
+      setSnackbarOpen(true)
+      return
+    }
+
+    try {
+      setManualChecking(true)
+      await checkPaymentStatusOnce()
+
+      // se ainda não pagou, só orienta (não força nada)
+      setSnackbarMessage("Verificando pagamento… se você acabou de pagar, pode levar alguns segundos.")
+      setSnackbarSeverity("success")
+      setSnackbarOpen(true)
+    } catch (err) {
+      console.error("Erro no Já paguei:", err)
+      setSnackbarMessage("Não consegui verificar agora. Aguarde alguns segundos e tente novamente.")
+      setSnackbarSeverity("error")
+      setSnackbarOpen(true)
+    } finally {
+      setManualChecking(false)
+    }
+  }
+
   const unitPrice = UNIT_PRICE_CENTS / 100
 
+  // ---------- Loading ----------
   if (loading) {
     return (
       <Box
         sx={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
           minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          bgcolor: "#0B0F19",
+          px: 2,
         }}
       >
-        <CircularProgress />
+        <Stack spacing={2} alignItems="center">
+          <CircularProgress />
+          <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.9rem" }}>
+            Preparando seu PIX…
+          </Typography>
+        </Stack>
       </Box>
     )
   }
 
-  // 🔴 Tela de erro - ajustada pra experiência melhor
+  // ---------- Error ----------
   if (error) {
     return (
-      <Box sx={{ bgcolor: "#F3F4F6", minHeight: "100vh", pb: 4 }}>
+      <Box sx={{ bgcolor: "#0B0F19", minHeight: "100vh", pb: 4 }}>
         <Container maxWidth="sm" sx={{ py: 4 }}>
           <Paper
             elevation={0}
             sx={{
               p: 3,
-              borderRadius: 2,
-              border: "1px solid #FCA5A5",
-              bgcolor: "#FEF2F2",
-              boxShadow: "0 10px 30px rgba(248,113,113,0.18)",
+              borderRadius: 3,
+              border: "1px solid rgba(239,68,68,0.35)",
+              bgcolor: "rgba(255,255,255,0.06)",
+              backdropFilter: "blur(10px)",
             }}
           >
             <Stack spacing={2}>
               <Stack direction="row" spacing={1.5} alignItems="center">
                 <Box
                   sx={{
-                    width: 40,
-                    height: 40,
+                    width: 42,
+                    height: 42,
                     borderRadius: "999px",
-                    bgcolor: "#FEE2E2",
+                    bgcolor: "rgba(239,68,68,0.15)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                   }}
                 >
-                  <Icon icon="mdi:alert-circle-outline" width={24} color="#B91C1C" />
+                  <Icon icon="mdi:alert-circle-outline" width={24} color="#EF4444" />
                 </Box>
                 <Box>
-                  <Typography
-                    variant="subtitle1"
-                    sx={{ fontWeight: 700, color: "#B91C1C" }}
-                  >
+                  <Typography sx={{ fontWeight: 800, color: "#fff" }}>
                     Não foi possível gerar o PIX agora
                   </Typography>
-                  <Typography
-                    variant="body2"
-                    sx={{ color: "#7F1D1D", fontSize: "0.85rem" }}
-                  >
+                  <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.85rem" }}>
                     {error}
                   </Typography>
                 </Box>
               </Stack>
 
-              <Typography
-                variant="caption"
-                sx={{ color: "#7F1D1D", fontSize: "0.75rem" }}
-              >
-                Isso geralmente acontece quando o emissor do PIX está instável.
-                Seus dados e seu pedido continuam seguros – você pode tentar novamente
-                em alguns instantes.
+              <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
+                Isso normalmente acontece quando o emissor do PIX está instável. Seus dados
+                continuam seguros — tente novamente em instantes.
               </Typography>
 
-              <Stack
-                direction={{ xs: "column", sm: "row" }}
-                spacing={1.5}
-                sx={{ mt: 1 }}
-              >
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
                 <Button
                   variant="contained"
-                  color="error"
                   fullWidth
                   onClick={() => {
-                    // reload total da página pra recomeçar o fluxo
-                    if (typeof window !== "undefined") {
-                      window.location.reload()
-                    } else {
-                      router.refresh()
-                    }
+                    if (typeof window !== "undefined") window.location.reload()
+                    else router.refresh()
                   }}
+                  sx={{
+                    fontWeight: 800,
+                    borderRadius: 999,
+                    textTransform: "none",
+                    py: 1.25,
+                    bgcolor: "#22C55E",
+                    "&:hover": { bgcolor: "#16A34A" },
+                  }}
+                >
+                  Tentar novamente
+                </Button>
+
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  onClick={() => router.back()}
                   sx={{
                     fontWeight: 700,
                     borderRadius: 999,
                     textTransform: "none",
-                  }}
-                >
-                  Tentar gerar PIX novamente
-                </Button>
-
-                <Button
-                  variant="text"
-                  fullWidth
-                  onClick={() => router.back()}
-                  sx={{
-                    fontWeight: 500,
-                    borderRadius: 999,
-                    textTransform: "none",
+                    py: 1.25,
+                    borderColor: "rgba(255,255,255,0.25)",
+                    color: "rgba(255,255,255,0.85)",
                   }}
                 >
                   Voltar
@@ -411,57 +432,54 @@ export default function PagamentoPage() {
     )
   }
 
+  // ---------- UI ----------
+  const autoCheckLabel = "Auto-check 5s"
+
   return (
-    <Box sx={{ bgcolor: "#F3F4F6", minHeight: "100vh", pb: 4 }}>
-      <Container maxWidth="sm" sx={{ pt: 3, pb: 2, px: { xs: 2, sm: 0 } }}>
-        {/* BARRA DE STATUS / TIMER */}
+    <Box
+      sx={{
+        minHeight: "100vh",
+        pb: 5,
+        bgcolor: "#0B0F19",
+        backgroundImage:
+          "radial-gradient(1200px 600px at 20% 10%, rgba(34,197,94,0.16), transparent 60%), radial-gradient(900px 500px at 90% 0%, rgba(245,158,11,0.12), transparent 55%)",
+      }}
+    >
+      <Container maxWidth="sm" sx={{ pt: { xs: 2, sm: 3 }, pb: 2, px: { xs: 2, sm: 0 } }}>
+        {/* STATUS / TIMER */}
         <Paper
           elevation={0}
           sx={{
-            mb: 3,
-            borderRadius: 2,
-            bgcolor: "#FEF3C7",
-            border: "1px solid #FACC15",
-            px: 2,
-            py: 1.5,
+            mb: 2,
+            borderRadius: 3,
+            bgcolor: "rgba(255,255,255,0.06)",
+            border: "1px solid rgba(255,255,255,0.10)",
+            backdropFilter: "blur(10px)",
+            px: { xs: 1.6, sm: 2 },
+            py: { xs: 1.2, sm: 1.4 },
           }}
         >
-          <Stack
-            direction="row"
-            alignItems="center"
-            justifyContent="space-between"
-            spacing={1.5}
-          >
-            <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5}>
+            <Stack direction="row" alignItems="center" spacing={1.3}>
               <Box
                 sx={{
-                  width: 26,
-                  height: 26,
+                  width: 28,
+                  height: 28,
                   borderRadius: "999px",
-                  bgcolor: "#F97316",
+                  bgcolor: "rgba(245,158,11,0.18)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <Icon icon="mdi:clock-outline" width={16} color="#FFF" />
+                <Icon icon="mdi:clock-outline" width={16} color="#F59E0B" />
               </Box>
               <Box>
-                <Typography
-                  variant="body2"
-                  sx={{
-                    fontWeight: 600,
-                    color: "#92400E",
-                    fontSize: "0.8rem",
-                  }}
-                >
+                <Typography sx={{ fontWeight: 800, color: "#fff", fontSize: "0.88rem", lineHeight: 1.1 }}>
                   Aguardando seu pagamento
                 </Typography>
-                <Typography
-                  variant="caption"
-                  sx={{ color: "#92400E", fontSize: "0.72rem" }}
-                >
-                  Tempo restante para pagamento
+                <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.72rem" }}>
+                  Tempo restante para finalizar
                 </Typography>
               </Box>
             </Stack>
@@ -471,11 +489,12 @@ export default function PagamentoPage() {
               size="small"
               sx={{
                 borderRadius: 999,
-                bgcolor: "#F97316",
-                color: "#FFF",
-                fontWeight: 700,
-                fontSize: "0.8rem",
-                px: 1.5,
+                bgcolor: "rgba(245,158,11,0.18)",
+                color: "#F59E0B",
+                fontWeight: 900,
+                fontSize: "0.78rem",
+                px: 1.2,
+                border: "1px solid rgba(245,158,11,0.25)",
               }}
             />
           </Stack>
@@ -483,145 +502,219 @@ export default function PagamentoPage() {
           <LinearProgress
             variant="indeterminate"
             sx={{
-              mt: 1.4,
+              mt: 1.2,
               height: 4,
               borderRadius: 999,
-              bgcolor: "rgba(0,0,0,0.04)",
+              bgcolor: "rgba(255,255,255,0.08)",
               "& .MuiLinearProgress-bar": {
-                bgcolor: "#F97316",
+                bgcolor: "#F59E0B",
               },
             }}
           />
         </Paper>
 
+        {/* CONFIRMAÇÃO AUTOMÁTICA (CLEAN + MOBILE) */}
+<Paper
+  elevation={0}
+  sx={{
+    mb: 2,
+    borderRadius: 3,
+    bgcolor: "rgba(34,197,94,0.08)",
+    border: "1px solid rgba(34,197,94,0.18)",
+    backdropFilter: "blur(10px)",
+    px: { xs: 1.6, sm: 2 },
+    py: { xs: 1.2, sm: 1.5 },
+  }}
+>
+  <Stack direction="row" spacing={1.3} alignItems="center">
+    <Box
+      sx={{
+        width: 34,
+        height: 34,
+        borderRadius: 2,
+        bgcolor: "rgba(34,197,94,0.16)",
+        border: "1px solid rgba(34,197,94,0.22)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      <Icon icon="mdi:check-decagram-outline" width={18} color="#22C55E" />
+    </Box>
+
+    <Box sx={{ flex: 1, minWidth: 0 }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={1}
+      >
+        <Typography
+          sx={{
+            fontWeight: 900,
+            color: "#fff",
+            fontSize: "0.92rem",
+            lineHeight: 1.15,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          Confirmando pagamento…
+        </Typography>
+
+        <Chip
+          label="5s"
+          size="small"
+          sx={{
+            height: 22,
+            borderRadius: 999,
+            bgcolor: "rgba(255,255,255,0.08)",
+            color: "rgba(255,255,255,0.85)",
+            fontWeight: 900,
+            fontSize: "0.72rem",
+            border: "1px solid rgba(255,255,255,0.12)",
+          }}
+        />
+      </Stack>
+
+      <Typography
+        sx={{
+          color: "rgba(255,255,255,0.70)",
+          fontSize: "0.78rem",
+          mt: 0.4,
+          lineHeight: 1.3,
+        }}
+      >
+        Pagou? Só aguarde aqui. Não atualize.
+      </Typography>
+    </Box>
+
+    <Button
+      variant="outlined"
+      onClick={handleIAlreadyPaid}
+      disabled={manualChecking}
+      sx={{
+        borderRadius: 999,
+        textTransform: "none",
+        fontWeight: 900,
+        px: 1.6,
+        py: 0.9,
+        minWidth: 104,
+        borderColor: "rgba(34,197,94,0.45)",
+        color: "#22C55E",
+        bgcolor: "rgba(34,197,94,0.06)",
+        "&:hover": {
+          bgcolor: "rgba(34,197,94,0.10)",
+          borderColor: "rgba(34,197,94,0.65)",
+        },
+      }}
+      startIcon={
+        manualChecking ? (
+          <CircularProgress size={16} sx={{ color: "#22C55E" }} />
+        ) : (
+          <Icon icon="mdi:check-circle-outline" width={18} />
+        )
+      }
+    >
+      Já paguei
+    </Button>
+  </Stack>
+</Paper>
+
+
         {/* CARD PRINCIPAL PIX */}
         <Paper
           elevation={0}
           sx={{
-            borderRadius: 2,
-            border: "1px solid #E5E7EB",
-            boxShadow: "0 10px 30px rgba(15,23,42,0.04)",
-            bgcolor: "#FFFFFF",
-            p: { xs: 2.4, sm: 3 },
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.10)",
+            bgcolor: "rgba(255,255,255,0.06)",
+            backdropFilter: "blur(10px)",
+            p: { xs: 2.1, sm: 3 },
           }}
         >
           {/* Cabeçalho */}
-          <Stack alignItems="center" spacing={1} sx={{ mb: 2.5 }}>
+          <Stack alignItems="center" spacing={0.9} sx={{ mb: 2.2 }}>
             <Box
               sx={{
-                width: 52,
-                height: 52,
-                borderRadius: "16px",
-                bgcolor: "#ECFDF3",
+                width: 54,
+                height: 54,
+                borderRadius: 3,
+                bgcolor: "rgba(34,197,94,0.14)",
+                border: "1px solid rgba(34,197,94,0.22)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                mb: 0.5,
               }}
             >
-              <Icon icon="simple-icons:pix" width={32} color="#00A868" />
+              <Icon icon="simple-icons:pix" width={30} color="#22C55E" />
             </Box>
-            <Typography
-              variant="h6"
-              sx={{
-                fontWeight: 700,
-                fontSize: { xs: "1.1rem", sm: "1.25rem" },
-                color: "#111827",
-              }}
-            >
+
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: { xs: "1.05rem", sm: "1.2rem" } }}>
               Pagar com PIX
             </Typography>
+
             <Typography
-              variant="h5"
               sx={{
-                fontWeight: 800,
-                color: "#16A34A",
-                fontSize: { xs: "1.4rem", sm: "1.6rem" },
-                mt: 0.3,
+                fontWeight: 1000,
+                color: "#22C55E",
+                fontSize: { xs: "1.45rem", sm: "1.7rem" },
+                letterSpacing: "-0.02em",
               }}
             >
               {formatBRL(resolved.amount)}
             </Typography>
-            <Typography
-              variant="caption"
-              sx={{ color: "#6B7280", mt: 0.2, fontSize: "0.78rem" }}
-            >
+
+            <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.78rem", textAlign: "center" }}>
               Você está adquirindo{" "}
-              <strong>
+              <strong style={{ color: "rgba(255,255,255,0.92)" }}>
                 {resolved.qty} Números × {formatBRL(unitPrice)}
               </strong>
             </Typography>
           </Stack>
 
-          {/* COMO PAGAR COM PIX (passo a passo) */}
-          <Box sx={{ mb: 2.5 }}>
-            <Typography
-              variant="subtitle2"
-              sx={{ fontWeight: 700, mb: 1.4, color: "#111827" }}
-            >
-              Como pagar com PIX:
+          <Divider sx={{ borderColor: "rgba(255,255,255,0.10)", mb: 2 }} />
+
+          {/* Como pagar */}
+          <Box sx={{ mb: 2 }}>
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem", mb: 1.2 }}>
+              Como pagar com PIX
             </Typography>
 
-            <Stack spacing={1.4}>
+            <Stack spacing={1.2}>
               {[
-                {
-                  title: "Abra o aplicativo do seu banco",
-                  desc: "Acesse a área PIX do aplicativo.",
-                },
-                {
-                  title: "Escolha pagar com QR Code ou Pix Copia e Cola",
-                  desc: "Use uma das opções abaixo para finalizar.",
-                },
-                {
-                  title: "Confirme o pagamento",
-                  desc: "Verifique os dados e confirme a transação.",
-                },
-                {
-                  title: "Pronto! Seu pedido será confirmado automaticamente",
-                  desc: "Você receberá um email e poderá acompanhar em “Minhas compras”.",
-                },
+                { title: "Abra o app do seu banco", desc: "Entre na área PIX do aplicativo." },
+                { title: "Escolha QR Code ou Copia e Cola", desc: "Use uma das opções abaixo para finalizar." },
+                { title: "Confirme o pagamento", desc: "Verifique os dados e confirme a transação." },
+                { title: "Confirmação automática", desc: "Após pagar, aguarde nesta tela. Não atualize." },
               ].map((step, index) => (
-                <Stack
-                  key={index}
-                  direction="row"
-                  spacing={1.5}
-                  alignItems="flex-start"
-                >
+                <Stack key={index} direction="row" spacing={1.2} alignItems="flex-start">
                   <Box
                     sx={{
                       width: 22,
                       height: 22,
                       borderRadius: "999px",
-                      bgcolor: "#EEF2FF",
+                      bgcolor: "rgba(255,255,255,0.10)",
+                      border: "1px solid rgba(255,255,255,0.10)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       fontSize: "0.75rem",
-                      fontWeight: 700,
-                      color: "#4F46E5",
+                      fontWeight: 900,
+                      color: "rgba(255,255,255,0.9)",
                       flexShrink: 0,
+                      mt: 0.2,
                     }}
                   >
                     {index + 1}
                   </Box>
                   <Box>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: "#111827",
-                        fontSize: "0.86rem",
-                        fontWeight: 600,
-                      }}
-                    >
+                    <Typography sx={{ color: "#fff", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 }}>
                       {step.title}
                     </Typography>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: "#4B5563",
-                        fontSize: "0.8rem",
-                      }}
-                    >
+                    <Typography sx={{ color: "rgba(255,255,255,0.68)", fontSize: "0.78rem", lineHeight: 1.35 }}>
                       {step.desc}
                     </Typography>
                   </Box>
@@ -630,8 +723,8 @@ export default function PagamentoPage() {
             </Stack>
           </Box>
 
-          {/* BOTÕES PIX */}
-          <Stack spacing={1.2}>
+          {/* Botões */}
+          <Stack spacing={1.1} sx={{ mt: 2 }}>
             <Button
               variant="contained"
               fullWidth
@@ -639,15 +732,13 @@ export default function PagamentoPage() {
               startIcon={<ContentCopyIcon />}
               disabled={!pixPayload}
               sx={{
-                py: 1.3,
-                fontWeight: 700,
+                py: 1.25,
+                fontWeight: 1000,
                 borderRadius: 999,
                 textTransform: "none",
                 fontSize: "0.95rem",
-                bgcolor: "#16A34A",
-                "&:hover": {
-                  bgcolor: "#15803D",
-                },
+                bgcolor: "#22C55E",
+                "&:hover": { bgcolor: "#16A34A" },
               }}
             >
               Copiar código Pix
@@ -660,50 +751,28 @@ export default function PagamentoPage() {
               startIcon={<QrCode2Icon />}
               disabled={!pixPayload}
               sx={{
-                py: 1.2,
-                fontWeight: 600,
+                py: 1.15,
+                fontWeight: 900,
                 borderRadius: 999,
                 textTransform: "none",
                 fontSize: "0.9rem",
-                borderColor: "#D1D5DB",
-                color: "#374151",
-                bgcolor: "#F9FAFB",
-                "&:hover": {
-                  bgcolor: "#F3F4F6",
-                },
+                borderColor: "rgba(255,255,255,0.22)",
+                color: "rgba(255,255,255,0.88)",
+                bgcolor: "rgba(255,255,255,0.04)",
+                "&:hover": { bgcolor: "rgba(255,255,255,0.06)" },
               }}
             >
               Ver QR Code
             </Button>
           </Stack>
 
-          {/* AVISO IMPORTANTE */}
-          <Box
-            sx={{
-              mt: 2.2,
-              pt: 1.4,
-              borderTop: "1px dashed #E5E7EB",
-            }}
-          >
+          {/* Aviso */}
+          <Box sx={{ mt: 2.2, pt: 1.4, borderTop: "1px dashed rgba(255,255,255,0.18)" }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Icon
-                icon="mdi:information-outline"
-                width={18}
-                color="#6B7280"
-                style={{ marginTop: 2 }}
-              />
-              <Typography
-                variant="caption"
-                sx={{
-                  color: "#6B7280",
-                  fontSize: "0.75rem",
-                  lineHeight: 1.5,
-                }}
-              >
-                <strong>Importante:</strong> O pagamento via PIX é processado
-                instantaneamente. Após a confirmação, você receberá seus números
-                por email e poderá acompanhar tudo em{" "}
-                <strong>“Minhas compras”.</strong>
+              <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
+              <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.75rem", lineHeight: 1.55 }}>
+                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong>{" "}
+                o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.
               </Typography>
             </Stack>
           </Box>
@@ -711,48 +780,23 @@ export default function PagamentoPage() {
       </Container>
 
       {/* Modal QR Code */}
-      <Dialog
-        open={qrCodeDialogOpen}
-        onClose={handleCloseQRCode}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle
-          sx={{
-            textAlign: "center",
-            fontWeight: 700,
-            pb: 1,
-          }}
-        >
+      <Dialog open={qrCodeDialogOpen} onClose={handleCloseQRCode} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ textAlign: "center", fontWeight: 900, pb: 1 }}>
           QR Code PIX
-          <IconButton
-            onClick={handleCloseQRCode}
-            sx={{ position: "absolute", right: 8, top: 8 }}
-          >
+          <IconButton onClick={handleCloseQRCode} sx={{ position: "absolute", right: 8, top: 8 }}>
             <CloseIcon />
           </IconButton>
         </DialogTitle>
         <DialogContent sx={{ textAlign: "center", py: 3 }}>
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            gutterBottom
-            sx={{ mb: 1.5 }}
-          >
+          <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 1.5 }}>
             Escaneie o QR Code com o aplicativo do seu banco.
           </Typography>
-          <Box
-            sx={{
-              my: 2,
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
+          <Box sx={{ my: 2, display: "flex", justifyContent: "center" }}>
             {pixPayload && (
               <Box
                 sx={{
                   p: 2,
-                  border: "4px solid #00a868",
+                  border: "4px solid #22C55E",
                   borderRadius: 2,
                   bgcolor: "white",
                 }}
@@ -761,15 +805,10 @@ export default function PagamentoPage() {
               </Box>
             )}
           </Box>
-          <Typography variant="h6" fontWeight={700} color="success.main">
+          <Typography variant="h6" fontWeight={900} color="success.main">
             {formatBRL(resolved.amount)}
           </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            display="block"
-            sx={{ mt: 1.5 }}
-          >
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1.5 }}>
             Válido por {timeRemaining}
           </Typography>
         </DialogContent>
@@ -792,11 +831,7 @@ export default function PagamentoPage() {
         onClose={() => setSnackbarOpen(false)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Alert
-          onClose={() => setSnackbarOpen(false)}
-          severity={snackbarSeverity}
-          sx={{ width: "100%" }}
-        >
+        <Alert onClose={() => setSnackbarOpen(false)} severity={snackbarSeverity} sx={{ width: "100%" }}>
           {snackbarMessage}
         </Alert>
       </Snackbar>

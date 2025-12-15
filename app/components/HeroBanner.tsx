@@ -12,6 +12,16 @@ export default function HeroBanner() {
     return () => clearTimeout(t)
   }, [])
 
+  // 🎨 Tokens (puxando o DNA do banner: dark + red + green)
+  const BG = "rgba(0,0,0,0.18)"
+  const GLASS = "rgba(255,255,255,0.06)"
+  const BORDER = "rgba(255,255,255,0.10)"
+  const TXT = "rgba(255,255,255,0.92)"
+  const MUTED = "rgba(255,255,255,0.70)"
+  const RED = "#DC2626"
+  const GREEN = "#22C55E"
+  const GREEN_DARK = "#16A34A"
+
   return (
     <Box
       sx={{
@@ -20,10 +30,10 @@ export default function HeroBanner() {
         flexDirection: "column",
         justifyContent: "center",
         alignItems: "center",
-        bgcolor: "#FFFFFF",
+        bgcolor: "transparent",
         px: 1.5,
-        pt: 1.5,
-        pb: 1.5,
+        pt: 1.4,
+        pb: 1.4,
       }}
     >
       {/* Banner */}
@@ -34,11 +44,12 @@ export default function HeroBanner() {
           maxWidth: 420,
           borderRadius: 3,
           overflow: "hidden",
-          boxShadow: "0 14px 28px rgba(0,0,0,0.18)",
           bgcolor: "#000",
+          border: `1px solid ${BORDER}`,
+          boxShadow: "0 18px 46px rgba(0,0,0,0.55)",
           transform: mounted
             ? "translateY(0) scale(1)"
-            : "translateY(8px) scale(0.97)",
+            : "translateY(10px) scale(0.975)",
           opacity: mounted ? 1 : 0,
           transition: "opacity 0.45s ease, transform 0.45s ease",
         }}
@@ -47,7 +58,7 @@ export default function HeroBanner() {
           sx={{
             position: "relative",
             width: "100%",
-            paddingTop: "50%", // mesma proporção do site deles
+            paddingTop: "50%", // mantém a proporção
           }}
         >
           <Image
@@ -59,68 +70,100 @@ export default function HeroBanner() {
             style={{
               objectFit: "cover",
               objectPosition: "center 45%",
+              filter: "contrast(1.06) saturate(1.04)",
+            }}
+          />
+
+          {/* overlay: dá leitura no dark sem “apagar” o banner */}
+          <Box
+            sx={{
+              pointerEvents: "none",
+              position: "absolute",
+              inset: 0,
+              background:
+                "linear-gradient(180deg, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0.45) 100%)",
+            }}
+          />
+
+          {/* brilho vermelho sutil (DNA do banner) */}
+          <Box
+            sx={{
+              pointerEvents: "none",
+              position: "absolute",
+              inset: 0,
+              background:
+                "radial-gradient(700px 250px at 20% 20%, rgba(220,38,38,0.22), transparent 60%)",
+              opacity: 0.9,
             }}
           />
         </Box>
       </Box>
 
-      {/* 🔥 Faixa abaixo do banner — IDENTICA à deles */}
+      {/* Faixa abaixo do banner (dark/glass) */}
       <Box
         sx={{
           width: "100%",
           maxWidth: 420,
-          mt: 1.5,
-          bgcolor: "#F9FAFB", // equivalente ao bg-background-pri
-          borderBottom: "2px solid #E5E7EB", // border-background-sec
-          borderRadius: "0 0 12px 12px",
-          py: 1.2,
-          px: 1,
+          mt: 1.4,
+          bgcolor: GLASS,
+          border: `1px solid ${BORDER}`,
+          backdropFilter: "blur(10px)",
+          borderRadius: 2.5,
+          px: 1.2,
+          py: 1.1,
           display: "flex",
-          flexDirection: "column",
+          alignItems: "center",
           justifyContent: "space-between",
+          gap: 1,
+          boxShadow: "0 14px 34px rgba(0,0,0,0.35)",
         }}
       >
-        {/* Linha 1 → Sorteio */}
-        <Box sx={{ pl: "10px", fontFamily: "Inter" }}>
-          <Typography
-            component="span"
+        {/* Sorteio */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.8 }}>
+          <Box
             sx={{
-              fontWeight: 600,
-              fontSize: "0.75rem",
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              bgcolor: GREEN,
+              boxShadow: "0 0 0 6px rgba(34,197,94,0.10)",
+              flexShrink: 0,
             }}
-          >
-            🍀 Sorteio:{" "}
-          </Typography>
-
-          <Typography
-            component="span"
-            sx={{
-              fontWeight: 600,
-              fontSize: "0.75rem",
-              color: "#374151", // text-grayplay-700
-            }}
-          >
-            26/12/2025 21:00
-          </Typography>
+          />
+          <Box>
+            <Typography
+              sx={{
+                fontWeight: 900,
+                fontSize: "0.74rem",
+                color: TXT,
+                letterSpacing: "-0.15px",
+                lineHeight: 1.1,
+              }}
+            >
+              Sorteio
+            </Typography>
+            <Typography
+              sx={{
+                fontWeight: 700,
+                fontSize: "0.76rem",
+                color: MUTED,
+                lineHeight: 1.1,
+                mt: 0.2,
+              }}
+            >
+              26/12/2025 21:00
+            </Typography>
+          </Box>
         </Box>
 
-        {/* Linha 2 → Preço */}
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            pr: 2,
-            pl: "10px",
-            alignSelf: "flex-end",
-            fontFamily: "Inter",
-          }}
-        >
+        {/* Preço */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <Typography
-            component="span"
             sx={{
-              fontSize: "0.85rem",
-              color: "#374151",
+              fontSize: "0.82rem",
+              color: MUTED,
+              fontWeight: 700,
+              whiteSpace: "nowrap",
             }}
           >
             Por apenas
@@ -128,18 +171,64 @@ export default function HeroBanner() {
 
           <Box
             sx={{
-              backgroundColor: "#16A34A", // bg-btn-gst-pri
-              color: "#FFFFFF",
-              px: 1,
-              py: 0.4,
-              borderRadius: 1,
-              fontWeight: 700,
-              fontSize: "0.85rem",
+              background:
+                "linear-gradient(180deg, rgba(34,197,94,1) 0%, rgba(22,163,74,1) 100%)",
+              color: "#07120B",
+              px: 1.1,
+              py: 0.45,
+              borderRadius: 1.6,
+              fontWeight: 1000,
+              fontSize: "0.86rem",
+              letterSpacing: "-0.2px",
+              boxShadow: "0 12px 26px rgba(34,197,94,0.28)",
+              border: "1px solid rgba(255,255,255,0.14)",
+              position: "relative",
+              overflow: "hidden",
             }}
           >
             R$ 9,90
+
+            {/* shine */}
+            <Box
+              sx={{
+                pointerEvents: "none",
+                position: "absolute",
+                top: "-40%",
+                left: "-30%",
+                width: "60%",
+                height: "200%",
+                background:
+                  "linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent)",
+                transform: mounted ? "translateX(220%)" : "translateX(0%)",
+                transition: "transform 1.25s ease",
+                opacity: 0.6,
+              }}
+            />
           </Box>
         </Box>
+      </Box>
+
+      {/* Linha/Glow inferior sutil pra “amarrar” com o resto do card */}
+      <Box
+        sx={{
+          width: "100%",
+          maxWidth: 420,
+          mt: 1.2,
+          height: 1,
+          background:
+            "linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent)",
+          position: "relative",
+        }}
+      >
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(90deg, transparent, rgba(220,38,38,0.30), transparent)",
+            opacity: 0.55,
+          }}
+        />
       </Box>
     </Box>
   )

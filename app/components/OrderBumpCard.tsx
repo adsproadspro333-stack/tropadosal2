@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import {
   Paper,
   Box,
@@ -8,34 +8,34 @@ import {
   Button,
   Stack,
   Chip,
+  Divider,
+  LinearProgress,
+  Collapse,
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 import { useCartStore } from "@/store/cartStore"
 import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 
-const BUMP_QTY = 50          // +2.000 números extras
-const BUMP_PRICE_CENTS = 990   // R$ 9,90
+const BUMP_QTY = 50
+const BUMP_PRICE_CENTS = 990
 
-// tempo inicial do contador: 1 minuto
 const INITIAL_MINUTES = 1
 const INITIAL_SECONDS = 0
 
 export default function OrderBumpCard() {
-  const {
-    addOrderBump,
-    bumpQty,
-    bumpAmountInCents,
-  } = useCartStore()
+  const { addOrderBump, bumpQty, bumpAmountInCents } = useCartStore()
   const { show } = useToast()
 
-  // aplicado local (sincronizado com o store)
   const [applied, setApplied] = useState(false)
+  const [justApplied, setJustApplied] = useState(false)
 
-  // estado do contador em segundos
-  const [timeLeft, setTimeLeft] = useState(
-    INITIAL_MINUTES * 60 + INITIAL_SECONDS,
+  const totalSeconds = useMemo(
+    () => INITIAL_MINUTES * 60 + INITIAL_SECONDS,
+    [],
   )
+
+  const [timeLeft, setTimeLeft] = useState(totalSeconds)
 
   // Se o bump já estiver no carrinho (ex: recarregou a página), marca como aplicado
   useEffect(() => {
@@ -48,7 +48,6 @@ export default function OrderBumpCard() {
   useEffect(() => {
     if (applied) return
 
-    const totalSeconds = INITIAL_MINUTES * 60 + INITIAL_SECONDS
     const startTime = Date.now()
 
     const interval = setInterval(() => {
@@ -60,13 +59,11 @@ export default function OrderBumpCard() {
         return next !== prev ? next : prev
       })
 
-      if (remaining <= 0) {
-        clearInterval(interval)
-      }
+      if (remaining <= 0) clearInterval(interval)
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [applied])
+  }, [applied, totalSeconds])
 
   // formata o tempo em MM:SS
   const minutes = Math.floor(timeLeft / 60)
@@ -75,6 +72,8 @@ export default function OrderBumpCard() {
     seconds,
   ).padStart(2, "0")}`
 
+  const isEnding = !applied && timeLeft > 0 && timeLeft <= 10
+
   const handleApply = () => {
     if (applied) return
 
@@ -82,265 +81,480 @@ export default function OrderBumpCard() {
     addOrderBump(BUMP_QTY, BUMP_PRICE_CENTS)
     setApplied(true)
 
+    // 🎉 feedback visual rápido (leve e direto)
+    setJustApplied(true)
+    setTimeout(() => setJustApplied(false), 2600)
+
     show(
       `🚀 Oferta especial ativada! +${BUMP_QTY.toLocaleString(
         "pt-BR",
-      )} números adicionados <b>(${formatBRL(
-        BUMP_PRICE_CENTS / 100,
-      )})</b>`,
+      )} números adicionados <b>`,
       "special-50-990",
     )
   }
+
+  // tokens visuais (mesmo universo do /pagamento)
+  const GLASS = "rgba(255,255,255,0.06)"
+  const BORDER = "rgba(255,255,255,0.10)"
+  const TXT = "rgba(255,255,255,0.90)"
+  const MUTED = "rgba(255,255,255,0.68)"
+  const GREEN = "#22C55E"
+
+  // barra de urgência (0..100)
+  const urgencyValue = useMemo(() => {
+    if (applied) return 100
+    const ratio = totalSeconds > 0 ? timeLeft / totalSeconds : 0
+    const clamped = Math.max(0, Math.min(1, ratio))
+    return Math.round(clamped * 100)
+  }, [applied, timeLeft, totalSeconds])
 
   return (
     <Paper
       elevation={0}
       sx={{
-        mb: 3,
-        borderRadius: 2.5,
+        mb: 2.2,
+        borderRadius: 3,
         overflow: "hidden",
-        border: "1px solid #FDBA74",
-        boxShadow: "0 14px 40px rgba(249,115,22,0.18)",
+        border: applied
+          ? `1px solid ${BORDER}`
+          : "1px solid rgba(249,115,22,0.28)",
+        bgcolor: GLASS,
+        backdropFilter: "blur(10px)",
+        boxShadow: applied
+          ? "0 12px 34px rgba(0,0,0,0.32)"
+          : "0 14px 44px rgba(249,115,22,0.10)",
         position: "relative",
+
+        // =========================
+        // KEYFRAMES (leves)
+        // =========================
         "@keyframes bumpGlow": {
-          "0%": {
-            boxShadow: "0 0 0 0 rgba(248,113,22,0.45)",
-          },
-          "70%": {
-            boxShadow: "0 0 0 12px rgba(248,113,22,0)",
-          },
-          "100%": {
-            boxShadow: "0 0 0 0 rgba(248,113,22,0)",
-          },
+          "0%": { boxShadow: "0 0 0 0 rgba(249,115,22,0.18)" },
+          "70%": { boxShadow: "0 0 0 14px rgba(249,115,22,0)" },
+          "100%": { boxShadow: "0 0 0 0 rgba(249,115,22,0)" },
         },
-        animation: !applied ? "bumpGlow 1.8s ease-out infinite" : "none",
+        "@keyframes shimmer": {
+          "0%": { transform: "translateX(-120%)" },
+          "100%": { transform: "translateX(120%)" },
+        },
+        "@keyframes pulseCTA": {
+          "0%": { transform: "scale(1)", filter: "brightness(1)" },
+          "50%": { transform: "scale(1.018)", filter: "brightness(1.06)" },
+          "100%": { transform: "scale(1)", filter: "brightness(1)" },
+        },
+        "@keyframes blink": {
+          "0%, 100%": { opacity: 1 },
+          "50%": { opacity: 0.72 },
+        },
+        "@keyframes popIn": {
+          "0%": { transform: "translateY(6px)", opacity: 0 },
+          "100%": { transform: "translateY(0)", opacity: 1 },
+        },
+        "@keyframes confettiFade": {
+          "0%": { opacity: 0, transform: "scale(0.96)" },
+          "10%": { opacity: 1, transform: "scale(1)" },
+          "100%": { opacity: 0, transform: "scale(1.02)" },
+        },
+
+        animation: !applied ? "bumpGlow 1.9s ease-out infinite" : "none",
       }}
     >
-      {/* TOPO LARANJA / HEADER */}
+      {/* SHIMMER overlay (premium, bem sutil) */}
+      {!applied && (
+        <Box
+          aria-hidden
+          sx={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            overflow: "hidden",
+          }}
+        >
+          <Box
+            sx={{
+              position: "absolute",
+              top: -40,
+              left: 0,
+              width: "45%",
+              height: "140%",
+              background:
+                "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.08) 35%, rgba(255,255,255,0) 70%)",
+              transform: "translateX(-120%)",
+              animation: "shimmer 2.6s ease-in-out infinite",
+              opacity: 0.55,
+            }}
+          />
+        </Box>
+      )}
+
+      {/* mini “celebração” leve quando aplica */}
+      {justApplied && (
+        <Box
+          aria-hidden
+          sx={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+            background:
+              "radial-gradient(700px 200px at 50% 20%, rgba(34,197,94,0.18), transparent 60%)",
+            animation: "confettiFade 2.6s ease-out forwards",
+          }}
+        />
+      )}
+
+      {/* HEADER (glass + laranja bem controlado) */}
       <Box
         sx={{
-          px: 2.2,
+          px: 2,
           py: 1.2,
-          bgcolor: "linear-gradient(90deg,#FB923C,#F97316)",
           background:
-            "linear-gradient(135deg, #FB923C 0%, #F97316 40%, #EF4444 100%)",
-          color: "#FFFFFF",
+            "linear-gradient(135deg, rgba(249,115,22,0.18) 0%, rgba(239,68,68,0.10) 55%, rgba(0,0,0,0) 100%)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          gap: 1.2,
+          position: "relative",
+          zIndex: 1,
         }}
       >
-        <Box>
-          <Typography
-            variant="subtitle2"
-            sx={{ fontWeight: 800, letterSpacing: 0.4, fontSize: "0.78rem" }}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.1, minWidth: 0 }}>
+          <Box
+            sx={{
+              width: 36,
+              height: 36,
+              borderRadius: "12px",
+              bgcolor: applied ? "rgba(34,197,94,0.14)" : "rgba(249,115,22,0.14)",
+              border: applied
+                ? "1px solid rgba(34,197,94,0.22)"
+                : "1px solid rgba(249,115,22,0.22)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              transition: "all 180ms ease",
+              transform: justApplied ? "scale(1.04)" : "scale(1)",
+            }}
           >
-            Saia na frente!
-          </Typography>
-          <Typography
-            variant="caption"
-            sx={{ opacity: 0.95, fontSize: "0.72rem" }}
-          >
-            Aumente suas chances em <b>+127%</b>
-          </Typography>
+            <Icon
+              icon={applied ? "mdi:check-decagram-outline" : "mdi:rocket-launch"}
+              width={18}
+              color={applied ? GREEN : "#FB923C"}
+            />
+          </Box>
+
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                fontWeight: 1000,
+                color: "#fff",
+                fontSize: "0.92rem",
+                lineHeight: 1.15,
+              }}
+            >
+              Oferta rápida do checkout
+            </Typography>
+
+            <Typography
+              sx={{
+                color: MUTED,
+                fontSize: "0.78rem",
+                display: "block",
+                mt: 0.2,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              +{BUMP_QTY} números por {formatBRL(BUMP_PRICE_CENTS / 100)}
+            </Typography>
+          </Box>
         </Box>
 
         <Chip
-          label="QUENTE"
+          label={applied ? "Ativada" : formattedTime}
           size="small"
-          icon={<Icon icon="mdi:fire" width={14} />}
           sx={{
-            bgcolor: "rgba(255,255,255,0.16)",
-            color: "#FFF",
+            bgcolor: applied ? "rgba(34,197,94,0.12)" : "rgba(249,115,22,0.14)",
+            color: applied ? GREEN : "#FDBA74",
             borderRadius: 999,
-            pl: 0.5,
-            "& .MuiChip-icon": {
-              color: "#FACC15",
-              ml: 0.2,
-            },
-            fontSize: "0.7rem",
-            fontWeight: 700,
+            fontWeight: 1000,
+            border: applied
+              ? "1px solid rgba(34,197,94,0.22)"
+              : "1px solid rgba(249,115,22,0.22)",
+            animation: applied ? "none" : isEnding ? "blink 0.8s infinite" : "none",
           }}
         />
       </Box>
 
-      {/* CORPO BRANCO */}
-      <Box sx={{ px: 2.2, pt: 1.6, pb: 2 }}>
-        <Box sx={{ textAlign: "center", mb: 1.2 }}>
-          <Typography
-            variant="caption"
-            sx={{ fontSize: "0.7rem", color: "#F97316", fontWeight: 700 }}
+      {/* Barra de urgência (real / visual) */}
+      {!applied && (
+        <Box sx={{ px: 2, pb: 1.0, position: "relative", zIndex: 1 }}>
+          <LinearProgress
+            variant="determinate"
+            value={urgencyValue}
+            sx={{
+              height: 6,
+              borderRadius: 999,
+              bgcolor: "rgba(255,255,255,0.08)",
+              "& .MuiLinearProgress-bar": {
+                bgcolor: isEnding ? "rgba(239,68,68,0.95)" : "rgba(249,115,22,0.95)",
+                borderRadius: 999,
+                transition: "transform 250ms linear",
+              },
+            }}
+          />
+        </Box>
+      )}
+
+      <Divider sx={{ borderColor: BORDER }} />
+
+      {/* CORPO */}
+      <Box sx={{ px: 2, pt: 1.6, pb: 1.8, position: "relative", zIndex: 1 }}>
+        {/* Applied banner */}
+        <Collapse in={applied} timeout={220}>
+          <Box
+            sx={{
+              mb: 1.25,
+              borderRadius: 2,
+              border: "1px solid rgba(34,197,94,0.22)",
+              bgcolor: "rgba(34,197,94,0.10)",
+              px: 1.2,
+              py: 0.95,
+              display: "flex",
+              alignItems: "center",
+              gap: 0.9,
+              animation: "popIn 200ms ease-out",
+            }}
           >
-            Triplicar as chances
-          </Typography>
-          <Typography
-            variant="body2"
-            sx={{ mt: 0.4, color: "#111827", fontSize: "0.86rem" }}
-          >
-            Adicione{" "}
-            <b style={{ color: "#DC2626" }}>+{BUMP_QTY} números</b> por apenas
+            <Icon icon="mdi:check-circle" width={18} color={GREEN} />
+            <Typography sx={{ color: "rgba(255,255,255,0.92)", fontSize: "0.82rem", fontWeight: 950 }}>
+              Oferta ativada: <span style={{ color: GREEN }}>+{BUMP_QTY} números</span> no seu pedido ✅
+            </Typography>
+          </Box>
+        </Collapse>
+
+        {/* título + preço */}
+        <Box sx={{ textAlign: "center", mb: 1.25 }}>
+          <Typography sx={{ fontWeight: 1000, color: "#fff", fontSize: "0.95rem" }}>
+            Adicione <span style={{ color: "#FDBA74" }}>+{BUMP_QTY} números</span> agora
           </Typography>
 
-          {/* 🔥 BLOCO DO PREÇO DESTACADO */}
           <Box
             sx={{
               mt: 1,
               display: "inline-flex",
-              flexDirection: "column",
               alignItems: "center",
-              px: 2,
-              py: 0.8,
+              gap: 1.0,
+              px: 1.4,
+              py: 0.75,
               borderRadius: 999,
-              bgcolor: "#ECFDF5",
-              border: "1px solid #22C55E",
+              bgcolor: "rgba(255,255,255,0.05)",
+              border: `1px solid ${BORDER}`,
             }}
           >
             <Typography
-              variant="h6"
               sx={{
-                m: 0,
+                fontWeight: 1000,
+                color: GREEN,
+                fontSize: "1.25rem",
                 lineHeight: 1,
-                fontWeight: 900,
-                color: "#16A34A",
-                fontSize: "1.4rem",
+                letterSpacing: "-0.02em",
               }}
             >
               {formatBRL(BUMP_PRICE_CENTS / 100)}
             </Typography>
-            <Typography
-              variant="caption"
+
+            <Chip
+              label="mais chances"
+              size="small"
               sx={{
-                fontSize: "0.7rem",
-                color: "#047857",
-                fontWeight: 700,
-                textTransform: "uppercase",
+                bgcolor: "rgba(34,197,94,0.12)",
+                color: GREEN,
+                borderRadius: 999,
+                fontWeight: 950,
+                border: "1px solid rgba(34,197,94,0.20)",
               }}
-            >
-              Aumente a sua sorte em 100x
-            </Typography>
+            />
           </Box>
+
+          <Typography
+            sx={{
+              display: "block",
+              mt: 0.7,
+              color: MUTED,
+              fontSize: "0.78rem",
+            }}
+          >
+            Oferta válida só nesta etapa. Depois some.
+          </Typography>
         </Box>
 
-        {/* BULLETS */}
-        <Stack spacing={0.4} sx={{ mb: 1.6, pl: 0.5 }}>
+        {/* benefícios (glass cards) */}
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr 1fr", sm: "1fr 1fr" },
+            gap: 0.8,
+            mb: 1.35,
+          }}
+        >
           {[
-            "127% mais chances de ganhar",
-            "Vantagem competitiva sobre outros participantes",
+            "Mais chances de ganhar",
+            "Vantagem sobre outros",
             "Mais números = mais sorte",
-            "Condição exclusiva por R$ 9,90",
+            "Condição exclusiva",
           ].map((item, idx) => (
             <Box
               key={idx}
-              sx={{ display: "flex", alignItems: "center", gap: 0.6 }}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.6,
+                p: 1,
+                borderRadius: 2,
+                bgcolor: "rgba(255,255,255,0.05)",
+                border: `1px solid ${BORDER}`,
+                transition: "transform 140ms ease, border-color 140ms ease",
+                transform: !applied && timeLeft > 0 ? "translateY(0)" : "translateY(0)",
+                "&:active": { transform: "scale(0.99)" },
+              }}
             >
-              <Icon
-                icon="mdi:check-circle"
-                width={16}
-                style={{ color: "#16A34A" }}
-              />
-              <Typography
-                variant="caption"
-                sx={{ fontSize: "0.76rem", color: "#374151" }}
-              >
+              <Icon icon="mdi:check-circle" width={16} color={GREEN} />
+              <Typography sx={{ fontSize: "0.78rem", color: TXT, fontWeight: 800 }}>
                 {item}
               </Typography>
             </Box>
           ))}
-        </Stack>
-
-        {/* BLOCO DE URGÊNCIA */}
-        <Box
-          sx={{
-            mt: 0.4,
-            mb: 1.6,
-            borderRadius: 1.5,
-            border: "1px dashed #FDBA74",
-            bgcolor: "#FFF7ED",
-            px: 1.5,
-            py: 1,
-            textAlign: "center",
-          }}
-        >
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              fontSize: "0.72rem",
-              color: "#EA580C",
-              mb: 0.4,
-            }}
-          >
-            🕒 Oportunidade única válida apenas nesta etapa do checkout
-          </Typography>
-          <Box
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              px: 1.8,
-              py: 0.4,
-              borderRadius: 999,
-              bgcolor: "#EF4444",
-              color: "#FFFFFF",
-              fontWeight: 800,
-              fontSize: "0.78rem",
-              letterSpacing: 0.4,
-              "@keyframes blink": {
-                "0%, 100%": { opacity: 1 },
-                "50%": { opacity: 0.65 },
-              },
-              animation: "blink 1.2s infinite",
-            }}
-          >
-            {formattedTime}
-          </Box>
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              mt: 0.4,
-              fontSize: "0.7rem",
-              color: "#B45309",
-            }}
-          >
-            Outros participantes já estão aproveitando esta oferta!
-          </Typography>
         </Box>
 
-        {/* BOTÃO PRINCIPAL DO BUMP */}
+        {/* urgência compacta */}
+        {!applied && (
+          <Box
+            sx={{
+              mb: 1.25,
+              borderRadius: 2,
+              border: isEnding
+                ? "1px dashed rgba(239,68,68,0.55)"
+                : "1px dashed rgba(249,115,22,0.35)",
+              bgcolor: isEnding ? "rgba(239,68,68,0.10)" : "rgba(249,115,22,0.08)",
+              px: 1.2,
+              py: 0.9,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1.2,
+            }}
+          >
+            <Stack direction="row" spacing={0.8} alignItems="center" sx={{ minWidth: 0 }}>
+              <Box
+                sx={{
+                  width: 26,
+                  height: 26,
+                  borderRadius: "999px",
+                  bgcolor: isEnding ? "rgba(239,68,68,0.16)" : "rgba(249,115,22,0.16)",
+                  border: isEnding
+                    ? "1px solid rgba(239,68,68,0.25)"
+                    : "1px solid rgba(249,115,22,0.22)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <Icon icon="mdi:clock-outline" width={16} color={isEnding ? "#FCA5A5" : "#FDBA74"} />
+              </Box>
+
+              <Typography
+                sx={{
+                  fontSize: "0.78rem",
+                  color: isEnding ? "#FCA5A5" : "#FDBA74",
+                  fontWeight: 950,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                Expira em instantes
+              </Typography>
+            </Stack>
+
+            <Chip
+              label={formattedTime}
+              size="small"
+              sx={{
+                bgcolor: isEnding ? "rgba(239,68,68,0.92)" : "rgba(239,68,68,0.85)",
+                color: "#fff",
+                fontWeight: 1000,
+                borderRadius: 999,
+                letterSpacing: 0.3,
+                animation: isEnding ? "blink 0.75s infinite" : "none",
+              }}
+            />
+          </Box>
+        )}
+
+        {/* CTA */}
         <Button
           fullWidth
           onClick={handleApply}
-          disabled={applied}
+          disabled={applied || timeLeft <= 0}
           variant={applied ? "outlined" : "contained"}
           sx={{
-            mt: 0.2,
             borderRadius: 999,
-            fontWeight: 800,
-            fontSize: "0.82rem",
+            fontWeight: 1000,
+            fontSize: "0.92rem",
             textTransform: "none",
-            py: 1.2,
-            bgcolor: applied ? "#FFFFFF" : "#F97316",
-            borderColor: "#F97316",
-            color: applied ? "#F97316" : "#FFFFFF",
+            py: 1.05,
+            bgcolor: applied ? "rgba(255,255,255,0.06)" : "#F97316",
+            borderColor: applied ? BORDER : "#F97316",
+            color: applied ? "rgba(255,255,255,0.88)" : "#0B0F19",
+            transition: "transform 120ms ease, filter 120ms ease, background-color 120ms ease",
+
+            // pulse só quando faz sentido (não aplicado e ainda com tempo)
+            animation:
+              !applied && timeLeft > 0 ? "pulseCTA 1.7s ease-in-out infinite" : "none",
+
             "&:hover": {
-              bgcolor: applied ? "#FFF7ED" : "#EA580C",
+              bgcolor: applied ? "rgba(255,255,255,0.08)" : "#FB923C",
+              filter: applied ? "none" : "brightness(1.02)",
+            },
+            "&:active": {
+              transform: "scale(0.985)",
+              filter: applied ? "none" : "brightness(1.06)",
+            },
+            "&.Mui-disabled": {
+              bgcolor: "rgba(255,255,255,0.06)",
+              color: "rgba(255,255,255,0.55)",
+              borderColor: "rgba(255,255,255,0.10)",
             },
           }}
+          startIcon={
+            applied ? (
+              <Icon icon="mdi:check-circle" width={18} />
+            ) : (
+              <Icon icon="mdi:rocket-launch" width={18} />
+            )
+          }
         >
-          {applied ? (
-            "Oferta adicionada ao pedido ✅"
-          ) : (
-            <>
-              <Icon
-                icon="mdi:rocket-launch"
-                width={18}
-                style={{ marginRight: 6 }}
-              />
-              QUERO TRIPLICAR MINHAS CHANCES!
-            </>
-          )}
+          {applied
+            ? "Oferta adicionada ao pedido"
+            : timeLeft <= 0
+              ? "Oferta expirou nesta etapa"
+              : `Adicionar +${BUMP_QTY} números por ${formatBRL(BUMP_PRICE_CENTS / 100)}`}
         </Button>
+
+        {/* rodapé micro */}
+        <Typography
+          sx={{
+            display: "block",
+            mt: 0.9,
+            color: "rgba(255,255,255,0.55)",
+            textAlign: "center",
+            fontSize: "0.72rem",
+          }}
+        >
+          Confirmação automática via PIX • sem precisar enviar comprovante
+        </Typography>
       </Box>
     </Paper>
   )

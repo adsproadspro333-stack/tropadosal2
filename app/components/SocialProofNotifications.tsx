@@ -45,11 +45,18 @@ export default function SocialProofNotifications() {
     }
   }, [])
 
+  // ---------- TOKENS (DNA dark) ----------
+  const GLASS = "rgba(255,255,255,0.06)"
+  const BORDER = "rgba(255,255,255,0.10)"
+  const TXT = "rgba(255,255,255,0.92)"
+  const MUTED = "rgba(255,255,255,0.70)"
+  const RED = "#DC2626"
+
   return (
     <Box
       sx={{
         position: "fixed",
-        bottom: { xs: 190, md: 200 },
+        bottom: { xs: 800, md: 700 },
         left: { xs: "50%", md: 40 },
         transform: { xs: "translateX(-50%)", md: "none" },
         zIndex: 998,
@@ -57,33 +64,93 @@ export default function SocialProofNotifications() {
       }}
     >
       <Paper
-        elevation={6}
+        elevation={0}
         sx={{
           px: 2,
-          py: 1.4,
+          py: 1.35,
           display: "flex",
           alignItems: "center",
-          gap: 1.5,
+          gap: 1.3,
           borderRadius: 9999,
-          opacity: open ? 1 : 0,
-          transform: open ? "scale(1)" : "scale(0.9)",
-          transition: "all 0.3s ease",
-          minWidth: 280,
-          backgroundColor: "#FFFFFF",
-          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
 
-          // ✅ CONTORNO VERMELHO ADICIONADO
-          border: "1.5px solid #8B0000",
+          opacity: open ? 1 : 0,
+          transform: open
+            ? { xs: "translateY(0) scale(1)", md: "translateX(0) scale(1)" }
+            : { xs: "translateY(8px) scale(0.96)", md: "translateX(-10px) scale(0.96)" },
+          transition: "opacity 0.28s ease, transform 0.28s ease",
+
+          minWidth: 288,
+          maxWidth: 360,
+
+          bgcolor: GLASS,
+          border: `1px solid ${BORDER}`,
+          backdropFilter: "blur(10px)",
+
+          // 🔥 contorno vermelho + glow (controlado)
+          boxShadow: open
+            ? `0 18px 40px rgba(0,0,0,0.45),
+               0 0 0 1px rgba(220,38,38,0.55),
+               0 14px 36px rgba(220,38,38,0.22)`
+            : `0 12px 28px rgba(0,0,0,0.35),
+               0 0 0 1px rgba(220,38,38,0.35)`,
+          position: "relative",
+          overflow: "hidden",
+
+          "&::before": {
+            content: '""',
+            position: "absolute",
+            inset: -1,
+            background:
+              "radial-gradient(420px 120px at 20% 10%, rgba(220,38,38,0.20), transparent 55%)",
+            pointerEvents: "none",
+          },
         }}
       >
-        <Icon icon="mdi:trophy" width={20} height={20} style={{ color: "#f59e0b" }} />
+        {/* Badge ícone */}
+        <Box
+          sx={{
+            width: 34,
+            height: 34,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            bgcolor: "rgba(245,158,11,0.14)",
+            border: `1px solid ${BORDER}`,
+            boxShadow: "0 10px 22px rgba(0,0,0,0.25)",
+            flexShrink: 0,
+          }}
+        >
+          <Icon icon="mdi:trophy" width={18} height={18} style={{ color: "#f59e0b" }} />
+        </Box>
 
-        <Box>
-          <Typography fontWeight={700} fontSize="0.85rem">
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            fontWeight={1000}
+            fontSize="0.86rem"
+            sx={{
+              color: TXT,
+              lineHeight: 1.15,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
             {currentWinner?.name} ({currentWinner?.state})
           </Typography>
-          <Typography fontSize="0.75rem" color="#6B7280">
-            Ganhou {currentWinner?.prize}
+
+          <Typography
+            fontSize="0.76rem"
+            sx={{
+              color: MUTED,
+              mt: 0.15,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            Ganhou <span style={{ color: "#fff", fontWeight: 900 }}>{currentWinner?.prize}</span>
+            <span style={{ color: RED, fontWeight: 900 }}> ✓</span>
           </Typography>
         </Box>
       </Paper>
