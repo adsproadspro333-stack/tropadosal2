@@ -5,7 +5,6 @@ import { prisma } from "@/lib/prisma"
 import crypto from "crypto"
 import { sendPushcutNotification } from "@/lib/pushcut"
 
-// 🔐 flag simples pra evitar log sensível em produção
 const IS_PRODUCTION = process.env.NODE_ENV === "production"
 
 const PAID_STATUSES = [
@@ -26,7 +25,6 @@ const SITE_URL =
 
 const PUSHCUT_ORDER_PAID_URL = process.env.PUSHCUT_ORDER_PAID_URL
 
-// Mensagem genérica pra não expor erro interno
 const SAFE_ERROR_MESSAGE =
   "Erro ao processar confirmação de pagamento. Se o pagamento foi realizado, ele será reprocessado automaticamente."
 
@@ -40,7 +38,6 @@ function sha256(value: string) {
 function getClientIp(req: Request) {
   const xff = req.headers.get("x-forwarded-for")
   if (xff) {
-    // x-forwarded-for pode vir "ip, ip, ip"
     const first = xff.split(",")[0]?.trim()
     if (first) return first
   }
@@ -83,6 +80,17 @@ function getEventTimeFromTx(tx: any) {
   return Math.floor(t / 1000)
 }
 
+function safeJsonParse(input: any) {
+  try {
+    if (!input) return null
+    if (typeof input === "object") return input
+    if (typeof input === "string") return JSON.parse(input)
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const bodyText = await req.text()
@@ -98,7 +106,10 @@ export async function POST(req: Request) {
       json = bodyText ? JSON.parse(bodyText) : {}
     } catch (e) {
       console.error("WEBHOOK: body não é JSON válido:", e)
-      return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 })
+      return NextResponse.json(
+        { ok: false, error: "Invalid JSON" },
+        { status: 400 },
+      )
     }
 
     const tx =
@@ -110,14 +121,18 @@ export async function POST(req: Request) {
 
     if (!tx) {
       console.error("WEBHOOK: payload inválido:", json)
-      return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 })
+      return NextResponse.json(
+        { ok: false, error: "Invalid payload" },
+        { status: 400 },
+      )
     }
 
+    // 🔑 gatewayId do provedor (o que você salva em Transaction.gatewayId)
     const gatewayId: string | null =
       tx.id ||
       tx.objectId ||
       tx.transactionId ||
-      tx.externalRef ||
+      tx.gatewayId ||
       null
 
     const rawStatus: string | null =
@@ -132,14 +147,19 @@ export async function POST(req: Request) {
 
     if (!gatewayId || !rawStatus) {
       console.error("WEBHOOK: faltando gatewayId ou status", { gatewayId, rawStatus })
-      return NextResponse.json({ ok: false, error: "Missing fields" }, { status: 400 })
+      return NextResponse.json(
+        { ok: false, error: "Missing fields" },
+        { status: 400 },
+      )
     }
 
+    // ignora status não pago
     if (!statusUpper || !PAID_STATUSES.includes(statusUpper)) {
       console.log("WEBHOOK: status ignorado:", statusUpper)
       return NextResponse.json({ ok: true, ignored: true })
     }
 
+    // busca transação pelo gatewayId
     const transaction = await prisma.transaction.findFirst({
       where: { gatewayId },
     })
@@ -149,7 +169,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, notFound: true })
     }
 
-    // 🔁 IDEMPOTÊNCIA: se já está paga, não faz mais nada
+    // idempotência: se já está paga, não atualiza nem reprocessa
     if (transaction.status === "paid") {
       console.log("WEBHOOK: transação já estava paga (duplicado):", {
         transactionId: transaction.id,
@@ -158,7 +178,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, alreadyPaid: true })
     }
 
-    // ✅ Atualiza transaction e order pra "paid"
+    // ✅ marca transação paga e pedido pago
     const updatedTransaction = await prisma.transaction.update({
       where: { id: transaction.id },
       data: { status: "paid" },
@@ -171,7 +191,10 @@ export async function POST(req: Request) {
 
     const orderWithUser = await prisma.order.findUnique({
       where: { id: updatedOrder.id },
-      include: { user: true },
+      include: {
+        user: true,
+        transactions: { orderBy: { createdAt: "desc" } },
+      },
     })
 
     console.log("WEBHOOK: pagamento confirmado:", {
@@ -197,8 +220,26 @@ export async function POST(req: Request) {
     // ================= META CAPI PURCHASE =================
     if (FB_PIXEL_ID && FB_CAPI_TOKEN && orderWithUser) {
       try {
-        const eventTime = getEventTimeFromTx(tx)
+        // ✅ pega sinais do NAV (melhor atribuição): Transaction.meta
+        // prioridade: transação do webhook, senão última do pedido
+        const txForSignals =
+          orderWithUser.transactions?.find((t) => t.id === updatedTransaction.id) ||
+          orderWithUser.transactions?.[0] ||
+          updatedTransaction
 
+        const metaObj = safeJsonParse((txForSignals as any).meta) || {}
+        const alreadySent = Boolean(metaObj?.purchaseSentAt)
+
+        // se já enviou Purchase antes (evita duplicar CAPI)
+        if (alreadySent) {
+          console.log("META CAPI: Purchase já enviado antes, pulando (dedupe):", {
+            orderId: updatedOrder.id,
+            transactionId: updatedTransaction.id,
+          })
+          return NextResponse.json({ ok: true, capiSkipped: true })
+        }
+
+        const eventTime = getEventTimeFromTx(tx)
         const valueNumber =
           Number(updatedTransaction.value) ||
           Number(updatedOrder.amount) ||
@@ -211,21 +252,28 @@ export async function POST(req: Request) {
         if (dbUser?.phone) userData.ph = [sha256(dbUser.phone)]
         if (dbUser?.cpf) userData.external_id = [sha256(dbUser.cpf)]
 
-        const ua = req.headers.get("user-agent")
-        if (ua) userData.client_user_agent = ua
+        // ✅ preferir sinais do meta (vem do browser quando gerou o PIX)
+        const uaFromMeta = metaObj?.clientUserAgent || metaObj?.client_user_agent
+        const ipFromMeta = metaObj?.clientIpAddress || metaObj?.client_ip_address
+        const fbpFromMeta = metaObj?.fbp
+        const fbcFromMeta = metaObj?.fbc
 
-        const ip = getClientIp(req)
-        if (ip) userData.client_ip_address = ip
+        const uaHeader = req.headers.get("user-agent")
+        if (uaFromMeta || uaHeader) userData.client_user_agent = uaFromMeta || uaHeader
 
-        // ✅ pega cookies do navegador (melhora MUITO a atribuição)
+        const ipHeader = getClientIp(req)
+        if (ipFromMeta || ipHeader) userData.client_ip_address = ipFromMeta || ipHeader
+
+        // ⚠️ cookie no webhook quase nunca existe (gateway), mas deixa fallback
         const cookies = parseCookies(req.headers.get("cookie"))
-        const fbp = cookies["_fbp"]
-        const fbc = cookies["_fbc"]
+        const fbp = fbpFromMeta || cookies["_fbp"]
+        const fbc = fbcFromMeta || cookies["_fbc"]
         if (fbp) userData.fbp = fbp
         if (fbc) userData.fbc = fbc
 
-        // ✅ EVENT_ID ÚNICO (dedupe real)
-        const eventIdFromOrder = orderWithUser.metaEventId || updatedTransaction.id
+        // ✅ EVENT_ID ÚNICO (dedupe com Pixel/Browser)
+        const eventIdFromOrder =
+          orderWithUser.metaEventId || updatedTransaction.id
 
         const capiBody: any = {
           data: [
@@ -265,6 +313,19 @@ export async function POST(req: Request) {
 
         const capiText = await capiRes.text()
         console.log("META CAPI RESPONSE (Purchase):", capiRes.status, capiText)
+
+        // ✅ marca como enviado pra nunca duplicar CAPI (sem migration)
+        const mergedMeta = {
+          ...(metaObj || {}),
+          purchaseSentAt: new Date().toISOString(),
+          capiEventId: String(eventIdFromOrder),
+          capiStatus: capiRes.status,
+        }
+
+        await prisma.transaction.update({
+          where: { id: updatedTransaction.id },
+          data: { meta: mergedMeta as any },
+        })
       } catch (err) {
         console.error("Erro ao enviar Purchase para Meta:", err)
       }
