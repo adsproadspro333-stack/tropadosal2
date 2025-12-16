@@ -46,6 +46,10 @@ model Transaction {
   gatewayId    String?
   createdAt    DateTime @default(now())
   pixCopiaCola String?  @map("pixcopiacola")
+
+  // ✅ NOVO: guarda _fbp/_fbc/ip/ua/extra (opcional, não quebra nada)
+  meta         Json?    @db.JsonB
+
   order        Order    @relation(fields: [orderId], references: [id])
 
   @@index([orderId])

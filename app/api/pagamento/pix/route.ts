@@ -1,3 +1,5 @@
+// app/api/pagamento/pix/route.ts
+
 import { NextResponse } from "next/server"
 import { createPixTransaction } from "@/lib/payments/ativopay"
 import { prisma } from "@/lib/prisma"
@@ -19,6 +21,29 @@ function sha256(value: string) {
     .digest("hex")
 }
 
+function parseCookies(cookieHeader: string | null): Record<string, string> {
+  if (!cookieHeader) return {}
+  const out: Record<string, string> = {}
+  cookieHeader.split(";").forEach((part) => {
+    const [kRaw, ...vParts] = part.split("=")
+    const k = (kRaw || "").trim()
+    if (!k) return
+    const v = vParts.join("=").trim()
+    out[k] = decodeURIComponent(v || "")
+  })
+  return out
+}
+
+function getClientIp(headers: Headers): string | undefined {
+  const ipHeader =
+    headers.get("x-forwarded-for") ||
+    headers.get("x-real-ip") ||
+    headers.get("cf-connecting-ip") ||
+    ""
+  const ip = ipHeader.split(",")[0]?.trim()
+  return ip || undefined
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -31,8 +56,12 @@ export async function POST(req: Request) {
 
     const headers = req.headers
     const userAgent = headers.get("user-agent") || undefined
-    const ipHeader = headers.get("x-forwarded-for") || headers.get("x-real-ip") || ""
-    const clientIpAddress = ipHeader.split(",")[0]?.trim() || undefined
+    const clientIpAddress = getClientIp(headers)
+
+    // ✅ captura _fbp/_fbc do cookie (melhora MUITO atribuição no Ads)
+    const cookies = parseCookies(headers.get("cookie"))
+    const fbp = cookies["_fbp"] || undefined
+    const fbc = cookies["_fbc"] || undefined
 
     const isUpsell = body?.upsell === true
 
@@ -44,18 +73,24 @@ export async function POST(req: Request) {
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       const rawAmount = body?.amountInCents ?? body?.amount
       const amountNum = Number(rawAmount)
-      totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
+      totalInCents =
+        Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
 
     if (!totalInCents || totalInCents <= 0) {
-      return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
+      return NextResponse.json(
+        { ok: false, error: "Valor do pedido inválido" },
+        { status: 400 },
+      )
     }
 
     // -------------------------------------------------
     // ANTI-BURLO POR VALOR
     // -------------------------------------------------
     const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS)) : 0
+      UNIT_PRICE_CENTS > 0
+        ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
+        : 0
 
     if (!quantityFromAmount || quantityFromAmount <= 0) {
       return NextResponse.json(
@@ -66,11 +101,18 @@ export async function POST(req: Request) {
 
     let effectiveQty = quantityFromAmount
 
-    if (Array.isArray(body.numbers) && body.numbers.length > 0 && body.numbers.length <= quantityFromAmount) {
+    if (
+      Array.isArray(body.numbers) &&
+      body.numbers.length > 0 &&
+      body.numbers.length <= quantityFromAmount
+    ) {
       effectiveQty = body.numbers.length
     }
 
-    if (Number(body?.quantity) > 0 && Number(body.quantity) <= quantityFromAmount) {
+    if (
+      Number(body?.quantity) > 0 &&
+      Number(body.quantity) <= quantityFromAmount
+    ) {
       effectiveQty = Number(body.quantity)
     }
 
@@ -80,13 +122,19 @@ export async function POST(req: Request) {
     // CLIENTE
     // -------------------------------------------------
     const customer = body?.customer || {}
-    const documentNumber = String(customer?.documentNumber || "").replace(/\D/g, "")
+    const documentNumber = String(customer?.documentNumber || "").replace(
+      /\D/g,
+      "",
+    )
     const phone = String(customer?.phone || "").replace(/\D/g, "")
     const email: string | null = customer?.email || null
     const fullName: string | null = customer?.name || null
 
     if (!documentNumber) {
-      return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
+      return NextResponse.json(
+        { ok: false, error: "CPF obrigatório" },
+        { status: 400 },
+      )
     }
 
     // -------------------------------------------------
@@ -125,7 +173,7 @@ export async function POST(req: Request) {
     if (!user) throw new Error("Usuário não encontrado")
 
     // -------------------------------------------------
-    // IDEMPOTÊNCIA (SEM MIGRATION):
+    // IDEMPOTÊNCIA:
     // - Reaproveita pedido PENDENTE recente (mesmo CPF + mesmo valor)
     // - Se já tiver PAGO recente, retorna "paid" (front redireciona)
     // -------------------------------------------------
@@ -165,11 +213,13 @@ export async function POST(req: Request) {
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },
-      include: { transactions: { orderBy: { createdAt: "desc" } } as any },
+      include: {
+        transactions: { orderBy: { createdAt: "desc" } },
+      },
     })
 
     if (recentPending) {
-      const existingTx = (recentPending as any).transactions?.[0] || null
+      const existingTx = recentPending.transactions?.[0] || null
 
       // Se já existe transaction com pix, retorna a mesma
       if (existingTx?.pixCopiaCola) {
@@ -212,9 +262,26 @@ export async function POST(req: Request) {
         traceable: true,
       })
 
-      const { pixCopiaECola, qrCodeBase64, expiresAt, transactionId: gatewayTransactionId, raw } = resp as any
+      const {
+        pixCopiaECola,
+        qrCodeBase64,
+        expiresAt,
+        transactionId: gatewayTransactionId,
+        raw,
+      } = resp as any
 
-      const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+      const gatewayId =
+        gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+
+      // ✅ agora é JsonB (Transaction.meta)
+      const meta = {
+        fbp,
+        fbc,
+        clientIpAddress,
+        clientUserAgent: userAgent,
+        createdFrom: isUpsell ? "upsell" : "main",
+        createdAt: new Date().toISOString(),
+      }
 
       const transaction = await prisma.transaction.create({
         data: {
@@ -223,6 +290,7 @@ export async function POST(req: Request) {
           status: "pending",
           gatewayId,
           pixCopiaCola: pixCopiaECola || null,
+          meta, // ✅
         },
       })
 
@@ -299,13 +367,29 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const { pixCopiaECola, qrCodeBase64, expiresAt, transactionId: gatewayTransactionId, raw } = resp as any
+    const {
+      pixCopiaECola,
+      qrCodeBase64,
+      expiresAt,
+      transactionId: gatewayTransactionId,
+      raw,
+    } = resp as any
 
-    const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+    const gatewayId =
+      gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
 
     // -------------------------------------------------
     // TRANSACTION (CRÍTICO)
     // -------------------------------------------------
+    const meta = {
+      fbp,
+      fbc,
+      clientIpAddress,
+      clientUserAgent: userAgent,
+      createdFrom: isUpsell ? "upsell" : "main",
+      createdAt: new Date().toISOString(),
+    }
+
     const transaction = await prisma.transaction.create({
       data: {
         orderId: order.id,
@@ -313,6 +397,7 @@ export async function POST(req: Request) {
         status: "pending",
         gatewayId,
         pixCopiaCola: pixCopiaECola || null,
+        meta, // ✅
       },
     })
 
@@ -333,6 +418,9 @@ export async function POST(req: Request) {
     )
   } catch (err) {
     console.error("ERRO /api/pagamento/pix:", err)
-    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
+    return NextResponse.json(
+      { ok: false, error: "Erro ao processar pagamento" },
+      { status: 500 },
+    )
   }
 }
