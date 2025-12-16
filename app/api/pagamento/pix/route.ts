@@ -36,13 +36,6 @@ export async function POST(req: Request) {
 
     const isUpsell = body?.upsell === true
 
-    // ✅ (CRÍTICO) Se o front mandar orderId, a gente prioriza esse pedido.
-    // Isso elimina “puxar PIX antigo” só porque o CPF é o mesmo.
-    const orderIdFromClient: string | null =
-      typeof body?.orderId === "string" && body.orderId.trim().length > 0
-        ? body.orderId.trim()
-        : null
-
     // -------------------------------------------------
     // VALOR TOTAL
     // -------------------------------------------------
@@ -58,14 +51,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
 
-    const amountInCents = Math.round(totalInCents)
-    const amountInReais = amountInCents / 100
-
     // -------------------------------------------------
     // ANTI-BURLO POR VALOR
     // -------------------------------------------------
     const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(amountInCents / UNIT_PRICE_CENTS)) : 0
+      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS)) : 0
 
     if (!quantityFromAmount || quantityFromAmount <= 0) {
       return NextResponse.json(
@@ -76,17 +66,15 @@ export async function POST(req: Request) {
 
     let effectiveQty = quantityFromAmount
 
-    if (
-      Array.isArray(body.numbers) &&
-      body.numbers.length > 0 &&
-      body.numbers.length <= quantityFromAmount
-    ) {
+    if (Array.isArray(body.numbers) && body.numbers.length > 0 && body.numbers.length <= quantityFromAmount) {
       effectiveQty = body.numbers.length
     }
 
     if (Number(body?.quantity) > 0 && Number(body.quantity) <= quantityFromAmount) {
       effectiveQty = Number(body.quantity)
     }
+
+    const amountInCents = Math.round(totalInCents)
 
     // -------------------------------------------------
     // CLIENTE
@@ -137,131 +125,19 @@ export async function POST(req: Request) {
     if (!user) throw new Error("Usuário não encontrado")
 
     // -------------------------------------------------
-    // IDEMPOTÊNCIA (SEM MIGRATION)
+    // IDEMPOTÊNCIA (SEM MIGRATION):
+    // - Reaproveita pedido PENDENTE recente (mesmo CPF + mesmo valor)
+    // - Se já tiver PAGO recente, retorna "paid" (front redireciona)
     // -------------------------------------------------
     const now = Date.now()
     const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
 
-    // =================================================
-    // 0) PRIORIDADE ABSOLUTA: se o front mandou orderId,
-    //    reaproveita SOMENTE esse pedido (se for do user e pendente).
-    // =================================================
-    if (orderIdFromClient) {
-      const pinnedOrder = await prisma.order.findFirst({
-        where: {
-          id: orderIdFromClient,
-          userId: user.id,
-          createdAt: { gte: since },
-        },
-        include: {
-          transactions: { orderBy: { createdAt: "desc" } } as any,
-        },
-      })
-
-      if (pinnedOrder) {
-        // Se já foi pago, devolve paid pra redirect imediato
-        if (pinnedOrder.status === "paid") {
-          return NextResponse.json(
-            {
-              ok: true,
-              alreadyPaid: true,
-              status: "paid",
-              orderId: pinnedOrder.id,
-              fbEventId: pinnedOrder.metaEventId || null,
-            },
-            { status: 200 },
-          )
-        }
-
-        // Se está pendente, tenta devolver transação existente
-        const existingTx = (pinnedOrder as any).transactions?.[0] || null
-        if (existingTx?.pixCopiaCola) {
-          return NextResponse.json(
-            {
-              ok: true,
-              reused: true,
-              orderId: pinnedOrder.id,
-              transactionId: existingTx.id,
-              pixCopiaECola: existingTx.pixCopiaCola,
-              qrCodeBase64: null,
-              expiresAt: null,
-              fbEventId: pinnedOrder.metaEventId || null,
-            },
-            { status: 200 },
-          )
-        }
-
-        // Se não existe tx/pix, cria transação e mantém o mesmo order
-        const fbEventId = pinnedOrder.metaEventId || crypto.randomUUID()
-
-        const resp = await createPixTransaction({
-          amount: amountInCents,
-          customer: {
-            name: fullName || "Cliente",
-            email: email || "cliente@example.com",
-            phone,
-            document: { type: "CPF", number: documentNumber },
-          },
-          items: [
-            {
-              title: `${effectiveQty} números`,
-              quantity: 1,
-              tangible: false,
-              unitPrice: amountInCents,
-              externalRef: pinnedOrder.id,
-            },
-          ],
-          expiresInDays: 1,
-          traceable: true,
-        })
-
-        const {
-          pixCopiaECola,
-          qrCodeBase64,
-          expiresAt,
-          transactionId: gatewayTransactionId,
-          raw,
-        } = resp as any
-
-        const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
-
-        const transaction = await prisma.transaction.create({
-          data: {
-            orderId: pinnedOrder.id,
-            value: amountInReais,
-            status: "pending",
-            gatewayId,
-            pixCopiaCola: pixCopiaECola || null,
-          },
-        })
-
-        return NextResponse.json(
-          {
-            ok: true,
-            reused: true,
-            orderId: pinnedOrder.id,
-            transactionId: transaction.id,
-            pixCopiaECola,
-            qrCodeBase64,
-            expiresAt,
-            fbEventId,
-          },
-          { status: 200 },
-        )
-      }
-      // Se orderId veio mas não achou, segue fluxo normal (não quebra funil)
-    }
-
-    // -------------------------------------------------
     // 1) Se tiver pedido PAGO recente com esse valor, evita gerar novo
-    //    (guarda extra: qty também precisa bater)
-    // -------------------------------------------------
     const recentPaid = await prisma.order.findFirst({
       where: {
         userId: user.id,
         status: "paid",
-        amount: amountInReais,
-        quantity: effectiveQty, // ✅ trava extra
+        amount: amountInCents / 100,
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },
@@ -280,16 +156,12 @@ export async function POST(req: Request) {
       )
     }
 
-    // -------------------------------------------------
     // 2) Se tiver pedido PENDENTE recente com esse valor, reaproveita (não cria outro)
-    //    (guarda extra: qty também precisa bater)
-    // -------------------------------------------------
     const recentPending = await prisma.order.findFirst({
       where: {
         userId: user.id,
         status: "pending",
-        amount: amountInReais,
-        quantity: effectiveQty, // ✅ trava extra
+        amount: amountInCents / 100,
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },
@@ -299,6 +171,7 @@ export async function POST(req: Request) {
     if (recentPending) {
       const existingTx = (recentPending as any).transactions?.[0] || null
 
+      // Se já existe transaction com pix, retorna a mesma
       if (existingTx?.pixCopiaCola) {
         return NextResponse.json(
           {
@@ -315,6 +188,7 @@ export async function POST(req: Request) {
         )
       }
 
+      // Se existe pedido pendente mas sem transação/pix, cria só a transação e reaproveita o pedido
       const fbEventId = recentPending.metaEventId || crypto.randomUUID()
 
       const resp = await createPixTransaction({
@@ -338,20 +212,14 @@ export async function POST(req: Request) {
         traceable: true,
       })
 
-      const {
-        pixCopiaECola,
-        qrCodeBase64,
-        expiresAt,
-        transactionId: gatewayTransactionId,
-        raw,
-      } = resp as any
+      const { pixCopiaECola, qrCodeBase64, expiresAt, transactionId: gatewayTransactionId, raw } = resp as any
 
       const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
 
       const transaction = await prisma.transaction.create({
         data: {
           orderId: recentPending.id,
-          value: amountInReais,
+          value: amountInCents / 100,
           status: "pending",
           gatewayId,
           pixCopiaCola: pixCopiaECola || null,
@@ -384,7 +252,7 @@ export async function POST(req: Request) {
     const order = await prisma.order.create({
       data: {
         userId: user.id,
-        amount: amountInReais,
+        amount: amountInCents / 100,
         status: "pending",
         quantity: effectiveQty,
         metaEventId: fbEventId,
@@ -396,10 +264,10 @@ export async function POST(req: Request) {
     // -------------------------------------------------
     if (PUSHCUT_ORDER_CREATED_URL) {
       await sendPushcutNotification(PUSHCUT_ORDER_CREATED_URL, {
-        title: `+1 ( R$ ${amountInReais.toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
+        title: `+1 ( R$ ${(amountInCents / 100).toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
         text: isUpsell ? "Upsell PIX gerado ⚡" : "Aguardando Pagamento ⚠️",
         orderId: order.id,
-        amount: amountInReais,
+        amount: amountInCents / 100,
         qty: effectiveQty,
       })
     }
@@ -431,13 +299,7 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const {
-      pixCopiaECola,
-      qrCodeBase64,
-      expiresAt,
-      transactionId: gatewayTransactionId,
-      raw,
-    } = resp as any
+    const { pixCopiaECola, qrCodeBase64, expiresAt, transactionId: gatewayTransactionId, raw } = resp as any
 
     const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
 
@@ -447,7 +309,7 @@ export async function POST(req: Request) {
     const transaction = await prisma.transaction.create({
       data: {
         orderId: order.id,
-        value: amountInReais,
+        value: amountInCents / 100,
         status: "pending",
         gatewayId,
         pixCopiaCola: pixCopiaECola || null,
