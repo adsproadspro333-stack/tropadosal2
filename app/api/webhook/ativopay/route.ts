@@ -22,8 +22,7 @@ const FB_CAPI_TOKEN = process.env.FACEBOOK_CAPI_TOKEN
 const FB_TEST_EVENT_CODE = process.env.FB_TEST_EVENT_CODE
 
 const SITE_URL =
-  process.env.SITE_URL ||
-  "https://mcpoze.plataformapremios.site"
+  process.env.SITE_URL || "https://favelapremios.plataformapremios.site"
 
 const PUSHCUT_ORDER_PAID_URL = process.env.PUSHCUT_ORDER_PAID_URL
 
@@ -38,18 +37,60 @@ function sha256(value: string) {
     .digest("hex")
 }
 
+function getClientIp(req: Request) {
+  const xff = req.headers.get("x-forwarded-for")
+  if (xff) {
+    // x-forwarded-for pode vir "ip, ip, ip"
+    const first = xff.split(",")[0]?.trim()
+    if (first) return first
+  }
+  const xRealIp = req.headers.get("x-real-ip")
+  if (xRealIp) return xRealIp.trim()
+  return null
+}
+
+function parseCookies(cookieHeader: string | null) {
+  const out: Record<string, string> = {}
+  if (!cookieHeader) return out
+  cookieHeader.split(";").forEach((part) => {
+    const [k, ...v] = part.trim().split("=")
+    if (!k) return
+    out[k] = decodeURIComponent(v.join("=") || "")
+  })
+  return out
+}
+
+// tenta inferir event_time do payload (quando existir)
+function getEventTimeFromTx(tx: any) {
+  const raw =
+    tx?.paidAt ||
+    tx?.paid_at ||
+    tx?.approvedAt ||
+    tx?.approved_at ||
+    tx?.confirmedAt ||
+    tx?.confirmed_at ||
+    tx?.updatedAt ||
+    tx?.updated_at ||
+    tx?.createdAt ||
+    tx?.created_at ||
+    null
+
+  if (!raw) return Math.floor(Date.now() / 1000)
+
+  const t = new Date(raw).getTime()
+  if (Number.isNaN(t)) return Math.floor(Date.now() / 1000)
+
+  return Math.floor(t / 1000)
+}
+
 export async function POST(req: Request) {
   try {
     const bodyText = await req.text()
 
-    // ❌ NÃO LOGAR MAIS O CORPO INTEIRO EM PRODUÇÃO
     if (!IS_PRODUCTION) {
       console.log("WEBHOOK RAW BODY (dev):", bodyText)
     } else {
-      console.log(
-        "WEBHOOK RECEBIDO (prod): body length=",
-        bodyText?.length ?? 0,
-      )
+      console.log("WEBHOOK RECEBIDO (prod): body length=", bodyText?.length ?? 0)
     }
 
     let json: any
@@ -57,10 +98,7 @@ export async function POST(req: Request) {
       json = bodyText ? JSON.parse(bodyText) : {}
     } catch (e) {
       console.error("WEBHOOK: body não é JSON válido:", e)
-      return NextResponse.json(
-        { ok: false, error: "Invalid JSON" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "Invalid JSON" }, { status: 400 })
     }
 
     const tx =
@@ -72,10 +110,7 @@ export async function POST(req: Request) {
 
     if (!tx) {
       console.error("WEBHOOK: payload inválido:", json)
-      return NextResponse.json(
-        { ok: false, error: "Invalid payload" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "Invalid payload" }, { status: 400 })
     }
 
     const gatewayId: string | null =
@@ -95,31 +130,11 @@ export async function POST(req: Request) {
 
     const statusUpper = rawStatus ? String(rawStatus).toUpperCase() : null
 
-    if (!IS_PRODUCTION) {
-      console.log("WEBHOOK NORMALIZADO:", {
-        gatewayId,
-        rawStatus,
-        statusUpper,
-      })
-    } else {
-      console.log("WEBHOOK NORMALIZADO (prod):", {
-        gatewayId,
-        statusUpper,
-      })
-    }
-
     if (!gatewayId || !rawStatus) {
-      console.error("WEBHOOK: faltando gatewayId ou status", {
-        gatewayId,
-        rawStatus,
-      })
-      return NextResponse.json(
-        { ok: false, error: "Missing fields" },
-        { status: 400 },
-      )
+      console.error("WEBHOOK: faltando gatewayId ou status", { gatewayId, rawStatus })
+      return NextResponse.json({ ok: false, error: "Missing fields" }, { status: 400 })
     }
 
-    // 🔎 Se NÃO for status de pagamento aprovado, apenas ignora
     if (!statusUpper || !PAID_STATUSES.includes(statusUpper)) {
       console.log("WEBHOOK: status ignorado:", statusUpper)
       return NextResponse.json({ ok: true, ignored: true })
@@ -136,13 +151,10 @@ export async function POST(req: Request) {
 
     // 🔁 IDEMPOTÊNCIA: se já está paga, não faz mais nada
     if (transaction.status === "paid") {
-      console.log(
-        "WEBHOOK: transação já estava paga, ignorando duplicado:",
-        {
-          transactionId: transaction.id,
-          orderId: transaction.orderId,
-        },
-      )
+      console.log("WEBHOOK: transação já estava paga (duplicado):", {
+        transactionId: transaction.id,
+        orderId: transaction.orderId,
+      })
       return NextResponse.json({ ok: true, alreadyPaid: true })
     }
 
@@ -185,7 +197,7 @@ export async function POST(req: Request) {
     // ================= META CAPI PURCHASE =================
     if (FB_PIXEL_ID && FB_CAPI_TOKEN && orderWithUser) {
       try {
-        const eventTime = Math.floor(Date.now() / 1000)
+        const eventTime = getEventTimeFromTx(tx)
 
         const valueNumber =
           Number(updatedTransaction.value) ||
@@ -193,7 +205,6 @@ export async function POST(req: Request) {
           0
 
         const userData: any = {}
-
         const dbUser = orderWithUser.user
 
         if (dbUser?.email) userData.em = [sha256(dbUser.email)]
@@ -203,11 +214,18 @@ export async function POST(req: Request) {
         const ua = req.headers.get("user-agent")
         if (ua) userData.client_user_agent = ua
 
-        if (tx?.ip) userData.client_ip_address = tx.ip
+        const ip = getClientIp(req)
+        if (ip) userData.client_ip_address = ip
 
-        // ✅ EVENT_ID ÚNICO SALVO NO PEDIDO (deduplicate real)
-        const eventIdFromOrder =
-          orderWithUser.metaEventId || updatedTransaction.id
+        // ✅ pega cookies do navegador (melhora MUITO a atribuição)
+        const cookies = parseCookies(req.headers.get("cookie"))
+        const fbp = cookies["_fbp"]
+        const fbc = cookies["_fbc"]
+        if (fbp) userData.fbp = fbp
+        if (fbc) userData.fbc = fbc
+
+        // ✅ EVENT_ID ÚNICO (dedupe real)
+        const eventIdFromOrder = orderWithUser.metaEventId || updatedTransaction.id
 
         const capiBody: any = {
           data: [
@@ -235,9 +253,7 @@ export async function POST(req: Request) {
           ],
         }
 
-        if (FB_TEST_EVENT_CODE) {
-          capiBody.test_event_code = FB_TEST_EVENT_CODE
-        }
+        if (FB_TEST_EVENT_CODE) capiBody.test_event_code = FB_TEST_EVENT_CODE
 
         const capiUrl = `https://graph.facebook.com/v21.0/${FB_PIXEL_ID}/events?access_token=${FB_CAPI_TOKEN}`
 
@@ -248,11 +264,7 @@ export async function POST(req: Request) {
         })
 
         const capiText = await capiRes.text()
-        console.log(
-          "META CAPI RESPONSE (Purchase):",
-          capiRes.status,
-          capiText,
-        )
+        console.log("META CAPI RESPONSE (Purchase):", capiRes.status, capiText)
       } catch (err) {
         console.error("Erro ao enviar Purchase para Meta:", err)
       }
@@ -261,13 +273,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
   } catch (err: any) {
     console.error("ERRO WEBHOOK:", err)
-
-    // Não expor detalhes internos pro caller (gateway)
     return NextResponse.json(
-      {
-        ok: false,
-        error: SAFE_ERROR_MESSAGE,
-      },
+      { ok: false, error: SAFE_ERROR_MESSAGE },
       { status: 500 },
     )
   }
