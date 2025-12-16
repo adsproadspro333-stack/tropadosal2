@@ -1,7 +1,7 @@
 // app/pagamento/page.tsx
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   Container,
@@ -34,12 +34,49 @@ import { UNIT_PRICE_CENTS } from "@/app/config/pricing"
 
 type OrderDTO = { id: string; amount: number; quantity: number }
 
+// ===============================
+// 🔒 Anti-duplicidade / Persistência
+// ===============================
+const LS_PENDING_KEY = "pix_pending_payload_v1"
+const PENDING_TTL_MS = 20 * 60 * 1000 // 20 min (seguro p/ evitar pedido duplo)
+
+type PendingPixCache = {
+  orderId: string | null
+  transactionId: string | null
+  pixPayload: string
+  amount: number // em reais
+  qty: number
+  createdAt: number // Date.now()
+}
+
+function safeJsonParse<T>(value: string | null): T | null {
+  if (!value) return null
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return null
+  }
+}
+
+function isPendingValid(p: PendingPixCache | null) {
+  if (!p) return false
+  if (!p.pixPayload || !p.transactionId) return false
+  if (!p.createdAt) return false
+  return Date.now() - p.createdAt <= PENDING_TTL_MS
+}
+
+function clearPendingPixCache() {
+  if (typeof window === "undefined") return
+  localStorage.removeItem(LS_PENDING_KEY)
+}
+
+// ===============================
+
 export default function PagamentoPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const orderIdFromUrl = searchParams.get("orderId")
 
-  // totalInCents vem da store
   const { qty, totalInCents } = useCartStore()
 
   const [resolved, setResolved] = useState<{ amount: number; qty: number }>(() => ({
@@ -57,18 +94,45 @@ export default function PagamentoPage() {
   const [qrCodeDialogOpen, setQrCodeDialogOpen] = useState(false)
   const [snackbarOpen, setSnackbarOpen] = useState(false)
   const [snackbarMessage, setSnackbarMessage] = useState("")
-  const [snackbarSeverity, setSnackbarSeverity] = useState<"success" | "error">(
-    "success",
-  )
+  const [snackbarSeverity, setSnackbarSeverity] = useState<"success" | "error">("success")
   const [timeRemaining, setTimeRemaining] = useState("14:28")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // UI state (não mexe na lógica)
+  // UI state
   const [manualChecking, setManualChecking] = useState(false)
   const paidRedirectedRef = useRef(false)
 
-  // 1) Se tiver orderId na URL, tenta carregar do backend
+  const unitPrice = UNIT_PRICE_CENTS / 100
+
+  // ===========================================
+  // 0) Se existir PIX pendente salvo, REUSAR
+  // ===========================================
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
+    if (!isPendingValid(pending)) {
+      // limpa lixo velho
+      clearPendingPixCache()
+      return
+    }
+
+    // Se já chegou aqui com ?orderId diferente, não reaproveita pra não confundir
+    if (orderIdFromUrl && pending?.orderId && orderIdFromUrl !== pending.orderId) return
+
+    // Se não tem pix na tela ainda, carrega do cache
+    if (!pixPayload && !transactionId) {
+      setResolved({ amount: pending.amount, qty: pending.qty })
+      setPixPayload(pending.pixPayload)
+      setTransactionId(pending.transactionId)
+      setOrderId(pending.orderId || orderIdFromUrl || null)
+      setLoading(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderIdFromUrl])
+
+  // 1) Se tiver orderId na URL, tenta carregar do backend (somente pra resolver valores)
   useEffect(() => {
     const loadOrderData = async () => {
       if (!orderIdFromUrl) {
@@ -77,18 +141,14 @@ export default function PagamentoPage() {
       }
 
       try {
-        const response = await fetch(`/api/orders/${orderIdFromUrl}`, {
-          cache: "no-store",
-        })
+        const response = await fetch(`/api/orders/${orderIdFromUrl}`, { cache: "no-store" })
         if (!response.ok) throw new Error("Failed to load order")
-
         const data: OrderDTO = await response.json()
 
-        // no banco, amount está em REAIS
         setResolved({ amount: data.amount, qty: data.quantity })
         setOrderId(data.id)
       } catch (err) {
-        console.error("[v0] Failed to load order, falling back to store:", err)
+        console.error("[pagamento] Failed to load order, falling back to store:", err)
         setResolved({ amount: totalInCents / 100, qty })
       }
     }
@@ -96,12 +156,16 @@ export default function PagamentoPage() {
     loadOrderData()
   }, [orderIdFromUrl, totalInCents, qty])
 
-  // 2) Geração do PIX (com trava pra não duplicar)
+  // 2) Geração do PIX (com trava + anti duplicidade)
   useEffect(() => {
+    // se já tem pix (reaproveitado do cache), não gera outro
+    if (pixPayload && transactionId) {
+      setLoading(false)
+      return
+    }
+
     const customerData =
-      typeof window !== "undefined"
-        ? localStorage.getItem("checkoutCustomer")
-        : null
+      typeof window !== "undefined" ? localStorage.getItem("checkoutCustomer") : null
 
     if (!customerData) {
       router.replace("/dados")
@@ -112,7 +176,19 @@ export default function PagamentoPage() {
       return
     }
 
-    // impede chamar 2x
+    // ✅ Se existe pendente válido, REUSA e sai
+    if (typeof window !== "undefined") {
+      const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
+      if (isPendingValid(pending)) {
+        setResolved({ amount: pending!.amount, qty: pending!.qty })
+        setPixPayload(pending!.pixPayload)
+        setTransactionId(pending!.transactionId)
+        setOrderId(pending!.orderId || orderIdFromUrl || null)
+        setLoading(false)
+        return
+      }
+    }
+
     if (pixRequestedRef.current) return
     pixRequestedRef.current = true
 
@@ -144,7 +220,6 @@ export default function PagamentoPage() {
           throw new Error(data.error || "Falha ao gerar PIX")
         }
 
-        // parser robusto para o código copia-e-cola
         const copiaECola: string | null =
           data.pixCopiaECola ??
           data.copia_e_cola ??
@@ -155,15 +230,14 @@ export default function PagamentoPage() {
 
         if (!copiaECola) {
           console.error("Resposta da API PIX sem copia e cola:", data)
-          throw new Error(
-            "PIX gerado, mas o código de pagamento não foi retornado pela API.",
-          )
+          throw new Error("PIX gerado, mas o código de pagamento não foi retornado pela API.")
         }
 
+        const txId = data.transactionId || data.id || null
         setPixPayload(copiaECola)
-        setTransactionId(data.transactionId || data.id || null)
+        setTransactionId(txId)
 
-        // 🔗 guarda o fbEventId pra página /pagamento-confirmado deduplicar com o CAPI
+        // 🔗 guarda eventId pra dedup
         const fbEventIdFromApi = data.fbEventId || data.metaEventId
         if (fbEventIdFromApi && typeof window !== "undefined") {
           window.localStorage.setItem("lastFbEventId", String(fbEventIdFromApi))
@@ -177,6 +251,19 @@ export default function PagamentoPage() {
           }
         }
 
+        // ✅ salva cache pendente (anti pedido duplo)
+        if (typeof window !== "undefined") {
+          const cache: PendingPixCache = {
+            orderId: newOrderId,
+            transactionId: txId,
+            pixPayload: copiaECola,
+            amount: resolved.amount,
+            qty: resolved.qty,
+            createdAt: Date.now(),
+          }
+          localStorage.setItem(LS_PENDING_KEY, JSON.stringify(cache))
+        }
+
         setLoading(false)
       } catch (err: any) {
         console.error("Erro ao gerar PIX:", err)
@@ -187,7 +274,7 @@ export default function PagamentoPage() {
 
     generatePix()
 
-    // contador de tempo (visual)
+    // contador visual
     let minutes = 14
     let seconds = 28
     const interval = setInterval(() => {
@@ -207,19 +294,23 @@ export default function PagamentoPage() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [router, resolved.qty, resolved.amount, orderIdFromUrl])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router, resolved.qty, resolved.amount, orderIdFromUrl, pixPayload, transactionId])
 
-  // helper: checa pagamento (usado pelo auto-check e pelo botão "Já paguei")
+  // helper: checa pagamento
   const checkPaymentStatusOnce = async () => {
     if (!transactionId) return
     if (paidRedirectedRef.current) return
 
-    const res = await fetch(`/api/transaction-status?id=${transactionId}`)
+    const res = await fetch(`/api/transaction-status?id=${transactionId}`, { cache: "no-store" })
     if (!res.ok) return
     const data = await res.json()
 
     if (data.status === "paid") {
       paidRedirectedRef.current = true
+
+      // ✅ limpa cache pendente (pra não travar próximas compras)
+      clearPendingPixCache()
 
       let finalOrderId: string | null = data.orderId || orderId || null
 
@@ -234,29 +325,56 @@ export default function PagamentoPage() {
         localStorage.setItem("lastPaidOrderId", String(finalOrderId))
       }
 
-      if (finalOrderId) {
-        router.push(`/pagamento-confirmado?orderId=${finalOrderId}`)
-      } else {
-        router.push("/pagamento-confirmado")
-      }
+      if (finalOrderId) router.push(`/pagamento-confirmado?orderId=${finalOrderId}`)
+      else router.push("/pagamento-confirmado")
     }
   }
 
-  // 3) Checa no backend se a transação foi paga e redireciona
+  // 3) Polling: agressivo no começo (3s) e depois 5s
   useEffect(() => {
     if (!transactionId) return
 
-    const interval = setInterval(async () => {
+    let elapsed = 0
+    const tick = async () => {
       try {
         await checkPaymentStatusOnce()
       } catch (err) {
         console.error("Erro ao checar status da transação:", err)
       }
-    }, 5000)
+    }
+
+    const interval = setInterval(() => {
+      elapsed += 1
+      // a cada 1s a gente só controla o timing
+      const every = elapsed <= 45 ? 3 : 5
+      if (elapsed % every === 0) tick()
+    }, 1000)
+
+    // checa imediatamente ao entrar
+    tick()
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionId, router, orderId])
+
+  // 4) Checar ao voltar pra aba / focar (resolve “paguei e voltei”)
+  useEffect(() => {
+    if (!transactionId) return
+
+    const onFocus = () => checkPaymentStatusOnce()
+    const onVis = () => {
+      if (document.visibilityState === "visible") checkPaymentStatusOnce()
+    }
+
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVis)
+
+    return () => {
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVis)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactionId])
 
   const handleCopyPixCode = async () => {
     if (!pixPayload) {
@@ -289,9 +407,7 @@ export default function PagamentoPage() {
     setQrCodeDialogOpen(true)
   }
 
-  const handleCloseQRCode = () => {
-    setQrCodeDialogOpen(false)
-  }
+  const handleCloseQRCode = () => setQrCodeDialogOpen(false)
 
   const handleIAlreadyPaid = async () => {
     if (!transactionId) {
@@ -305,7 +421,6 @@ export default function PagamentoPage() {
       setManualChecking(true)
       await checkPaymentStatusOnce()
 
-      // se ainda não pagou, só orienta (não força nada)
       setSnackbarMessage("Verificando pagamento… se você acabou de pagar, pode levar alguns segundos.")
       setSnackbarSeverity("success")
       setSnackbarOpen(true)
@@ -318,8 +433,6 @@ export default function PagamentoPage() {
       setManualChecking(false)
     }
   }
-
-  const unitPrice = UNIT_PRICE_CENTS / 100
 
   // ---------- Loading ----------
   if (loading) {
@@ -338,6 +451,9 @@ export default function PagamentoPage() {
           <CircularProgress />
           <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.9rem" }}>
             Preparando seu PIX…
+          </Typography>
+          <Typography sx={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", textAlign: "center" }}>
+            Se você já tinha um pagamento pendente, estamos recuperando automaticamente.
           </Typography>
         </Stack>
       </Box>
@@ -385,8 +501,7 @@ export default function PagamentoPage() {
               </Stack>
 
               <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
-                Isso normalmente acontece quando o emissor do PIX está instável. Seus dados
-                continuam seguros — tente novamente em instantes.
+                Isso pode acontecer quando o emissor do PIX está instável. Seus dados continuam seguros — tente novamente em instantes.
               </Typography>
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
@@ -433,8 +548,6 @@ export default function PagamentoPage() {
   }
 
   // ---------- UI ----------
-  const autoCheckLabel = "Auto-check 5s"
-
   return (
     <Box
       sx={{
@@ -506,123 +619,115 @@ export default function PagamentoPage() {
               height: 4,
               borderRadius: 999,
               bgcolor: "rgba(255,255,255,0.08)",
-              "& .MuiLinearProgress-bar": {
-                bgcolor: "#F59E0B",
-              },
+              "& .MuiLinearProgress-bar": { bgcolor: "#F59E0B" },
             }}
           />
         </Paper>
 
-        {/* CONFIRMAÇÃO AUTOMÁTICA (CLEAN + MOBILE) */}
-<Paper
-  elevation={0}
-  sx={{
-    mb: 2,
-    borderRadius: 3,
-    bgcolor: "rgba(34,197,94,0.08)",
-    border: "1px solid rgba(34,197,94,0.18)",
-    backdropFilter: "blur(10px)",
-    px: { xs: 1.6, sm: 2 },
-    py: { xs: 1.2, sm: 1.5 },
-  }}
->
-  <Stack direction="row" spacing={1.3} alignItems="center">
-    <Box
-      sx={{
-        width: 34,
-        height: 34,
-        borderRadius: 2,
-        bgcolor: "rgba(34,197,94,0.16)",
-        border: "1px solid rgba(34,197,94,0.22)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <Icon icon="mdi:check-decagram-outline" width={18} color="#22C55E" />
-    </Box>
-
-    <Box sx={{ flex: 1, minWidth: 0 }}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        spacing={1}
-      >
-        <Typography
+        {/* CONFIRMAÇÃO AUTOMÁTICA (ANTI ANSIEDADE + ANTI DUPLICIDADE) */}
+        <Paper
+          elevation={0}
           sx={{
-            fontWeight: 900,
-            color: "#fff",
-            fontSize: "0.92rem",
-            lineHeight: 1.15,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            mb: 2,
+            borderRadius: 3,
+            bgcolor: "rgba(34,197,94,0.08)",
+            border: "1px solid rgba(34,197,94,0.18)",
+            backdropFilter: "blur(10px)",
+            px: { xs: 1.6, sm: 2 },
+            py: { xs: 1.2, sm: 1.5 },
           }}
         >
-          Confirmando pagamento…
-        </Typography>
+          <Stack direction="row" spacing={1.3} alignItems="center">
+            <Box
+              sx={{
+                width: 34,
+                height: 34,
+                borderRadius: 2,
+                bgcolor: "rgba(34,197,94,0.16)",
+                border: "1px solid rgba(34,197,94,0.22)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <Icon icon="mdi:check-decagram-outline" width={18} color="#22C55E" />
+            </Box>
 
-        <Chip
-          label="5s"
-          size="small"
-          sx={{
-            height: 22,
-            borderRadius: 999,
-            bgcolor: "rgba(255,255,255,0.08)",
-            color: "rgba(255,255,255,0.85)",
-            fontWeight: 900,
-            fontSize: "0.72rem",
-            border: "1px solid rgba(255,255,255,0.12)",
-          }}
-        />
-      </Stack>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                <Typography
+                  sx={{
+                    fontWeight: 900,
+                    color: "#fff",
+                    fontSize: "0.92rem",
+                    lineHeight: 1.15,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  Confirmando pagamento…
+                </Typography>
 
-      <Typography
-        sx={{
-          color: "rgba(255,255,255,0.70)",
-          fontSize: "0.78rem",
-          mt: 0.4,
-          lineHeight: 1.3,
-        }}
-      >
-        Pagou? Só aguarde aqui. Não atualize.
-      </Typography>
-    </Box>
+                <Chip
+                  label="auto"
+                  size="small"
+                  sx={{
+                    height: 22,
+                    borderRadius: 999,
+                    bgcolor: "rgba(255,255,255,0.08)",
+                    color: "rgba(255,255,255,0.85)",
+                    fontWeight: 900,
+                    fontSize: "0.72rem",
+                    border: "1px solid rgba(255,255,255,0.12)",
+                  }}
+                />
+              </Stack>
 
-    <Button
-      variant="outlined"
-      onClick={handleIAlreadyPaid}
-      disabled={manualChecking}
-      sx={{
-        borderRadius: 999,
-        textTransform: "none",
-        fontWeight: 900,
-        px: 1.6,
-        py: 0.9,
-        minWidth: 104,
-        borderColor: "rgba(34,197,94,0.45)",
-        color: "#22C55E",
-        bgcolor: "rgba(34,197,94,0.06)",
-        "&:hover": {
-          bgcolor: "rgba(34,197,94,0.10)",
-          borderColor: "rgba(34,197,94,0.65)",
-        },
-      }}
-      startIcon={
-        manualChecking ? (
-          <CircularProgress size={16} sx={{ color: "#22C55E" }} />
-        ) : (
-          <Icon icon="mdi:check-circle-outline" width={18} />
-        )
-      }
-    >
-      Já paguei
-    </Button>
-  </Stack>
-</Paper>
+              <Typography
+                sx={{
+                  color: "rgba(255,255,255,0.75)",
+                  fontSize: "0.78rem",
+                  mt: 0.4,
+                  lineHeight: 1.3,
+                }}
+              >
+                Pagou? Só aguarde aqui. <strong style={{ color: "#fff" }}>Não gere outro pagamento.</strong>
+              </Typography>
+            </Box>
 
+            <Button
+              variant="outlined"
+              onClick={handleIAlreadyPaid}
+              disabled={manualChecking}
+              sx={{
+                borderRadius: 999,
+                textTransform: "none",
+                fontWeight: 900,
+                px: 1.6,
+                py: 0.9,
+                minWidth: 104,
+                borderColor: "rgba(34,197,94,0.45)",
+                color: "#22C55E",
+                bgcolor: "rgba(34,197,94,0.06)",
+                "&:hover": {
+                  bgcolor: "rgba(34,197,94,0.10)",
+                  borderColor: "rgba(34,197,94,0.65)",
+                },
+              }}
+              startIcon={
+                manualChecking ? (
+                  <CircularProgress size={16} sx={{ color: "#22C55E" }} />
+                ) : (
+                  <Icon icon="mdi:check-circle-outline" width={18} />
+                )
+              }
+            >
+              Já paguei
+            </Button>
+          </Stack>
+        </Paper>
 
         {/* CARD PRINCIPAL PIX */}
         <Paper
@@ -688,7 +793,7 @@ export default function PagamentoPage() {
                 { title: "Abra o app do seu banco", desc: "Entre na área PIX do aplicativo." },
                 { title: "Escolha QR Code ou Copia e Cola", desc: "Use uma das opções abaixo para finalizar." },
                 { title: "Confirme o pagamento", desc: "Verifique os dados e confirme a transação." },
-                { title: "Confirmação automática", desc: "Após pagar, aguarde nesta tela. Não atualize." },
+                { title: "Confirmação automática", desc: "Após pagar, aguarde nesta tela. Não atualize e não gere outro PIX." },
               ].map((step, index) => (
                 <Stack key={index} direction="row" spacing={1.2} alignItems="flex-start">
                   <Box
@@ -772,7 +877,8 @@ export default function PagamentoPage() {
               <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
               <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.75rem", lineHeight: 1.55 }}>
                 <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong>{" "}
-                o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.
+                o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.{" "}
+                <strong style={{ color: "#fff" }}>Se não aparecer na hora, é normal — o sistema confirma automaticamente.</strong>
               </Typography>
             </Stack>
           </Box>
@@ -813,12 +919,7 @@ export default function PagamentoPage() {
           </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: "center", pb: 2.5 }}>
-          <Button
-            onClick={handleCloseQRCode}
-            variant="outlined"
-            size="medium"
-            sx={{ minWidth: 120, borderRadius: 999 }}
-          >
+          <Button onClick={handleCloseQRCode} variant="outlined" size="medium" sx={{ minWidth: 120, borderRadius: 999 }}>
             Fechar
           </Button>
         </DialogActions>
