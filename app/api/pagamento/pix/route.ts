@@ -8,6 +8,10 @@ import { sendPushcutNotification } from "@/lib/pushcut"
 const PUSHCUT_ORDER_CREATED_URL = process.env.PUSHCUT_ORDER_CREATED_URL
 const isProduction = process.env.NODE_ENV === "production"
 
+// 🔒 Janela de idempotência (evita duplicar pedidos por impaciência/refresh/voltar)
+const IDEMPOTENCY_WINDOW_MINUTES = 30
+const IDEMPOTENCY_WINDOW_MS = IDEMPOTENCY_WINDOW_MINUTES * 60 * 1000
+
 function sha256(value: string) {
   return crypto
     .createHash("sha256")
@@ -27,11 +31,17 @@ export async function POST(req: Request) {
 
     const headers = req.headers
     const userAgent = headers.get("user-agent") || undefined
-    const ipHeader =
-      headers.get("x-forwarded-for") || headers.get("x-real-ip") || ""
+    const ipHeader = headers.get("x-forwarded-for") || headers.get("x-real-ip") || ""
     const clientIpAddress = ipHeader.split(",")[0]?.trim() || undefined
 
     const isUpsell = body?.upsell === true
+
+    // ✅ (CRÍTICO) Se o front mandar orderId, a gente prioriza esse pedido.
+    // Isso elimina “puxar PIX antigo” só porque o CPF é o mesmo.
+    const orderIdFromClient: string | null =
+      typeof body?.orderId === "string" && body.orderId.trim().length > 0
+        ? body.orderId.trim()
+        : null
 
     // -------------------------------------------------
     // VALOR TOTAL
@@ -41,26 +51,21 @@ export async function POST(req: Request) {
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       const rawAmount = body?.amountInCents ?? body?.amount
       const amountNum = Number(rawAmount)
-      totalInCents =
-        Number.isFinite(amountNum) && amountNum > 0
-          ? Math.round(amountNum)
-          : 0
+      totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
 
     if (!totalInCents || totalInCents <= 0) {
-      return NextResponse.json(
-        { ok: false, error: "Valor do pedido inválido" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
+
+    const amountInCents = Math.round(totalInCents)
+    const amountInReais = amountInCents / 100
 
     // -------------------------------------------------
     // ANTI-BURLO POR VALOR
     // -------------------------------------------------
     const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0
-        ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
-        : 0
+      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(amountInCents / UNIT_PRICE_CENTS)) : 0
 
     if (!quantityFromAmount || quantityFromAmount <= 0) {
       return NextResponse.json(
@@ -79,14 +84,9 @@ export async function POST(req: Request) {
       effectiveQty = body.numbers.length
     }
 
-    if (
-      Number(body?.quantity) > 0 &&
-      Number(body.quantity) <= quantityFromAmount
-    ) {
+    if (Number(body?.quantity) > 0 && Number(body.quantity) <= quantityFromAmount) {
       effectiveQty = Number(body.quantity)
     }
-
-    const amountInCents = Math.round(totalInCents)
 
     // -------------------------------------------------
     // CLIENTE
@@ -98,16 +98,8 @@ export async function POST(req: Request) {
     const fullName: string | null = customer?.name || null
 
     if (!documentNumber) {
-      return NextResponse.json(
-        { ok: false, error: "CPF obrigatório" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
     }
-
-    // -------------------------------------------------
-    // META EVENT ID
-    // -------------------------------------------------
-    const fbEventId = crypto.randomUUID()
 
     // -------------------------------------------------
     // USER (CPF SEMPRE DOMINANTE)
@@ -135,26 +127,264 @@ export async function POST(req: Request) {
         })
       } catch (err: any) {
         if (err?.code === "P2002") {
-          user = await prisma.user.findFirst({
-            where: { OR: orConditions },
-          })
+          user = await prisma.user.findFirst({ where: { OR: orConditions } })
         } else {
           throw err
         }
       }
     }
 
-    if (!user) {
-      throw new Error("Usuário não encontrado")
+    if (!user) throw new Error("Usuário não encontrado")
+
+    // -------------------------------------------------
+    // IDEMPOTÊNCIA (SEM MIGRATION)
+    // -------------------------------------------------
+    const now = Date.now()
+    const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
+
+    // =================================================
+    // 0) PRIORIDADE ABSOLUTA: se o front mandou orderId,
+    //    reaproveita SOMENTE esse pedido (se for do user e pendente).
+    // =================================================
+    if (orderIdFromClient) {
+      const pinnedOrder = await prisma.order.findFirst({
+        where: {
+          id: orderIdFromClient,
+          userId: user.id,
+          createdAt: { gte: since },
+        },
+        include: {
+          transactions: { orderBy: { createdAt: "desc" } } as any,
+        },
+      })
+
+      if (pinnedOrder) {
+        // Se já foi pago, devolve paid pra redirect imediato
+        if (pinnedOrder.status === "paid") {
+          return NextResponse.json(
+            {
+              ok: true,
+              alreadyPaid: true,
+              status: "paid",
+              orderId: pinnedOrder.id,
+              fbEventId: pinnedOrder.metaEventId || null,
+            },
+            { status: 200 },
+          )
+        }
+
+        // Se está pendente, tenta devolver transação existente
+        const existingTx = (pinnedOrder as any).transactions?.[0] || null
+        if (existingTx?.pixCopiaCola) {
+          return NextResponse.json(
+            {
+              ok: true,
+              reused: true,
+              orderId: pinnedOrder.id,
+              transactionId: existingTx.id,
+              pixCopiaECola: existingTx.pixCopiaCola,
+              qrCodeBase64: null,
+              expiresAt: null,
+              fbEventId: pinnedOrder.metaEventId || null,
+            },
+            { status: 200 },
+          )
+        }
+
+        // Se não existe tx/pix, cria transação e mantém o mesmo order
+        const fbEventId = pinnedOrder.metaEventId || crypto.randomUUID()
+
+        const resp = await createPixTransaction({
+          amount: amountInCents,
+          customer: {
+            name: fullName || "Cliente",
+            email: email || "cliente@example.com",
+            phone,
+            document: { type: "CPF", number: documentNumber },
+          },
+          items: [
+            {
+              title: `${effectiveQty} números`,
+              quantity: 1,
+              tangible: false,
+              unitPrice: amountInCents,
+              externalRef: pinnedOrder.id,
+            },
+          ],
+          expiresInDays: 1,
+          traceable: true,
+        })
+
+        const {
+          pixCopiaECola,
+          qrCodeBase64,
+          expiresAt,
+          transactionId: gatewayTransactionId,
+          raw,
+        } = resp as any
+
+        const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+
+        const transaction = await prisma.transaction.create({
+          data: {
+            orderId: pinnedOrder.id,
+            value: amountInReais,
+            status: "pending",
+            gatewayId,
+            pixCopiaCola: pixCopiaECola || null,
+          },
+        })
+
+        return NextResponse.json(
+          {
+            ok: true,
+            reused: true,
+            orderId: pinnedOrder.id,
+            transactionId: transaction.id,
+            pixCopiaECola,
+            qrCodeBase64,
+            expiresAt,
+            fbEventId,
+          },
+          { status: 200 },
+        )
+      }
+      // Se orderId veio mas não achou, segue fluxo normal (não quebra funil)
     }
 
     // -------------------------------------------------
-    // ORDER
+    // 1) Se tiver pedido PAGO recente com esse valor, evita gerar novo
+    //    (guarda extra: qty também precisa bater)
+    // -------------------------------------------------
+    const recentPaid = await prisma.order.findFirst({
+      where: {
+        userId: user.id,
+        status: "paid",
+        amount: amountInReais,
+        quantity: effectiveQty, // ✅ trava extra
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+    })
+
+    if (recentPaid) {
+      return NextResponse.json(
+        {
+          ok: true,
+          alreadyPaid: true,
+          status: "paid",
+          orderId: recentPaid.id,
+          fbEventId: recentPaid.metaEventId || null,
+        },
+        { status: 200 },
+      )
+    }
+
+    // -------------------------------------------------
+    // 2) Se tiver pedido PENDENTE recente com esse valor, reaproveita (não cria outro)
+    //    (guarda extra: qty também precisa bater)
+    // -------------------------------------------------
+    const recentPending = await prisma.order.findFirst({
+      where: {
+        userId: user.id,
+        status: "pending",
+        amount: amountInReais,
+        quantity: effectiveQty, // ✅ trava extra
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: "desc" },
+      include: { transactions: { orderBy: { createdAt: "desc" } } as any },
+    })
+
+    if (recentPending) {
+      const existingTx = (recentPending as any).transactions?.[0] || null
+
+      if (existingTx?.pixCopiaCola) {
+        return NextResponse.json(
+          {
+            ok: true,
+            reused: true,
+            orderId: recentPending.id,
+            transactionId: existingTx.id,
+            pixCopiaECola: existingTx.pixCopiaCola,
+            qrCodeBase64: null,
+            expiresAt: null,
+            fbEventId: recentPending.metaEventId || null,
+          },
+          { status: 200 },
+        )
+      }
+
+      const fbEventId = recentPending.metaEventId || crypto.randomUUID()
+
+      const resp = await createPixTransaction({
+        amount: amountInCents,
+        customer: {
+          name: fullName || "Cliente",
+          email: email || "cliente@example.com",
+          phone,
+          document: { type: "CPF", number: documentNumber },
+        },
+        items: [
+          {
+            title: `${effectiveQty} números`,
+            quantity: 1,
+            tangible: false,
+            unitPrice: amountInCents,
+            externalRef: recentPending.id,
+          },
+        ],
+        expiresInDays: 1,
+        traceable: true,
+      })
+
+      const {
+        pixCopiaECola,
+        qrCodeBase64,
+        expiresAt,
+        transactionId: gatewayTransactionId,
+        raw,
+      } = resp as any
+
+      const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+
+      const transaction = await prisma.transaction.create({
+        data: {
+          orderId: recentPending.id,
+          value: amountInReais,
+          status: "pending",
+          gatewayId,
+          pixCopiaCola: pixCopiaECola || null,
+        },
+      })
+
+      return NextResponse.json(
+        {
+          ok: true,
+          reused: true,
+          orderId: recentPending.id,
+          transactionId: transaction.id,
+          pixCopiaECola,
+          qrCodeBase64,
+          expiresAt,
+          fbEventId,
+        },
+        { status: 200 },
+      )
+    }
+
+    // -------------------------------------------------
+    // META EVENT ID (novo pedido)
+    // -------------------------------------------------
+    const fbEventId = crypto.randomUUID()
+
+    // -------------------------------------------------
+    // ORDER (novo)
     // -------------------------------------------------
     const order = await prisma.order.create({
       data: {
         userId: user.id,
-        amount: amountInCents / 100,
+        amount: amountInReais,
         status: "pending",
         quantity: effectiveQty,
         metaEventId: fbEventId,
@@ -162,18 +392,14 @@ export async function POST(req: Request) {
     })
 
     // -------------------------------------------------
-    // PUSHCUT – PEDIDO GERADO
+    // PUSHCUT – PEDIDO GERADO (somente se for novo)
     // -------------------------------------------------
     if (PUSHCUT_ORDER_CREATED_URL) {
       await sendPushcutNotification(PUSHCUT_ORDER_CREATED_URL, {
-        title: `+1 ( R$ ${(amountInCents / 100)
-          .toFixed(2)
-          .replace(".", ",")} ) RF [ P.Z ]`,
-        text: isUpsell
-          ? "Upsell PIX gerado ⚡"
-          : "Aguardando Pagamento ⚠️",
+        title: `+1 ( R$ ${amountInReais.toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
+        text: isUpsell ? "Upsell PIX gerado ⚡" : "Aguardando Pagamento ⚠️",
         orderId: order.id,
-        amount: amountInCents / 100,
+        amount: amountInReais,
         qty: effectiveQty,
       })
     }
@@ -213,11 +439,7 @@ export async function POST(req: Request) {
       raw,
     } = resp as any
 
-    const gatewayId =
-      gatewayTransactionId ||
-      raw?.data?.id ||
-      raw?.transactionId ||
-      ""
+    const gatewayId = gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
 
     // -------------------------------------------------
     // TRANSACTION (CRÍTICO)
@@ -225,7 +447,7 @@ export async function POST(req: Request) {
     const transaction = await prisma.transaction.create({
       data: {
         orderId: order.id,
-        value: amountInCents / 100,
+        value: amountInReais,
         status: "pending",
         gatewayId,
         pixCopiaCola: pixCopiaECola || null,
@@ -249,9 +471,6 @@ export async function POST(req: Request) {
     )
   } catch (err) {
     console.error("ERRO /api/pagamento/pix:", err)
-    return NextResponse.json(
-      { ok: false, error: "Erro ao processar pagamento" },
-      { status: 500 },
-    )
+    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
   }
 }

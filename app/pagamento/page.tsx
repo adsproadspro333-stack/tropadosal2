@@ -1,7 +1,7 @@
 // app/pagamento/page.tsx
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   Container,
@@ -501,7 +501,8 @@ export default function PagamentoPage() {
               </Stack>
 
               <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
-                Isso pode acontecer quando o emissor do PIX está instável. Seus dados continuam seguros — tente novamente em instantes.
+                Isso pode acontecer quando o emissor do PIX está instável. Seus dados continuam seguros — tente novamente
+                em instantes.
               </Typography>
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
@@ -874,11 +875,18 @@ export default function PagamentoPage() {
           {/* Aviso */}
           <Box sx={{ mt: 2.2, pt: 1.4, borderTop: "1px dashed rgba(255,255,255,0.18)" }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
+              <Icon
+                icon="mdi:information-outline"
+                width={18}
+                color="rgba(255,255,255,0.70)"
+                style={{ marginTop: 2 }}
+              />
               <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.75rem", lineHeight: 1.55 }}>
-                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong>{" "}
-                o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.{" "}
-                <strong style={{ color: "#fff" }}>Se não aparecer na hora, é normal — o sistema confirma automaticamente.</strong>
+                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong> o PIX pode confirmar em segundos.
+                Se você acabou de pagar, mantenha esta tela aberta.{" "}
+                <strong style={{ color: "#fff" }}>
+                  Se não aparecer na hora, é normal — o sistema confirma automaticamente.
+                </strong>
               </Typography>
             </Stack>
           </Box>
