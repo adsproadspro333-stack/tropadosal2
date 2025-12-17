@@ -10,16 +10,9 @@ import { sendPushcutNotification } from "@/lib/pushcut"
 const PUSHCUT_ORDER_CREATED_URL = process.env.PUSHCUT_ORDER_CREATED_URL
 const isProduction = process.env.NODE_ENV === "production"
 
-// 🔒 Janela de idempotência (evita duplicar pedidos por impaciência/refresh/voltar)
+// 🔒 Janela de idempotência
 const IDEMPOTENCY_WINDOW_MINUTES = 30
 const IDEMPOTENCY_WINDOW_MS = IDEMPOTENCY_WINDOW_MINUTES * 60 * 1000
-
-function sha256(value: string) {
-  return crypto
-    .createHash("sha256")
-    .update(value.trim().toLowerCase())
-    .digest("hex")
-}
 
 function parseCookies(cookieHeader: string | null): Record<string, string> {
   if (!cookieHeader) return {}
@@ -44,6 +37,83 @@ function getClientIp(headers: Headers): string | undefined {
   return ip || undefined
 }
 
+function buildMetaString(input: {
+  fbp?: string
+  fbc?: string
+  clientIpAddress?: string
+  userAgent?: string
+  createdFrom: "main" | "upsell"
+  provider?: {
+    id?: string | null
+    gatewayId?: string | null
+    externalRef?: string | null
+  }
+}) {
+  const obj: any = {
+    ...(input.fbp ? { fbp: input.fbp } : {}),
+    ...(input.fbc ? { fbc: input.fbc } : {}),
+    ...(input.clientIpAddress ? { clientIpAddress: input.clientIpAddress } : {}),
+    ...(input.userAgent ? { clientUserAgent: input.userAgent } : {}),
+    createdFrom: input.createdFrom,
+    createdAt: new Date().toISOString(),
+    ...(input.provider
+      ? {
+          provider: {
+            ...(input.provider.id ? { id: input.provider.id } : {}),
+            ...(input.provider.gatewayId ? { gatewayId: input.provider.gatewayId } : {}),
+            ...(input.provider.externalRef ? { externalRef: input.provider.externalRef } : {}),
+          },
+        }
+      : {}),
+  }
+
+  return JSON.stringify(obj)
+}
+
+// ✅ mensagem única pro front (sem expor gateway)
+function pixUnavailableResponse(extra?: any) {
+  if (!isProduction) {
+    console.error("[pix] PIX indisponível agora:", extra)
+  }
+  return NextResponse.json(
+    { ok: false, error: "PIX indisponível no momento. Tente novamente em instantes." },
+    { status: 503 },
+  )
+}
+
+// ✅ MW: garante que o gatewayId usado no banco seja SEMPRE o txid retornado
+function resolveGatewayId(resp: any) {
+  const txid =
+    resp?.transactionId ||
+    resp?.txid ||
+    resp?.raw?.data?.txid ||
+    resp?.raw?.txid ||
+    resp?.raw?.data?.transactionId ||
+    resp?.raw?.transactionId ||
+    null
+
+  const s = String(txid || "").trim()
+  return s || null
+}
+
+// 🔒 Só reutiliza se houver PIX + gatewayId válido (evita “pix fantasma”)
+function canReuseExistingTx(existingTx: any) {
+  if (!existingTx) return false
+  const pix = String(existingTx.pixCopiaCola || "").trim()
+  const gw = String(existingTx.gatewayId || "").trim()
+
+  if (!pix) return false
+  if (!gw) return false
+
+  // heurística segura: gatewayId não pode ser igual ao id do registro (cuid)
+  if (existingTx.id && String(existingTx.id).trim() === gw) return false
+
+  // txid costuma ter tamanho razoável
+  if (gw.length < 8) return false
+
+  return true
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -58,7 +128,6 @@ export async function POST(req: Request) {
     const userAgent = headers.get("user-agent") || undefined
     const clientIpAddress = getClientIp(headers)
 
-    // ✅ captura _fbp/_fbc do cookie (melhora MUITO atribuição no Ads)
     const cookies = parseCookies(headers.get("cookie"))
     const fbp = cookies["_fbp"] || undefined
     const fbc = cookies["_fbc"] || undefined
@@ -73,24 +142,18 @@ export async function POST(req: Request) {
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       const rawAmount = body?.amountInCents ?? body?.amount
       const amountNum = Number(rawAmount)
-      totalInCents =
-        Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
+      totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
 
     if (!totalInCents || totalInCents <= 0) {
-      return NextResponse.json(
-        { ok: false, error: "Valor do pedido inválido" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
 
     // -------------------------------------------------
     // ANTI-BURLO POR VALOR
     // -------------------------------------------------
     const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0
-        ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS))
-        : 0
+      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS)) : 0
 
     if (!quantityFromAmount || quantityFromAmount <= 0) {
       return NextResponse.json(
@@ -109,10 +172,7 @@ export async function POST(req: Request) {
       effectiveQty = body.numbers.length
     }
 
-    if (
-      Number(body?.quantity) > 0 &&
-      Number(body.quantity) <= quantityFromAmount
-    ) {
+    if (Number(body?.quantity) > 0 && Number(body.quantity) <= quantityFromAmount) {
       effectiveQty = Number(body.quantity)
     }
 
@@ -122,30 +182,22 @@ export async function POST(req: Request) {
     // CLIENTE
     // -------------------------------------------------
     const customer = body?.customer || {}
-    const documentNumber = String(customer?.documentNumber || "").replace(
-      /\D/g,
-      "",
-    )
+    const documentNumber = String(customer?.documentNumber || "").replace(/\D/g, "")
     const phone = String(customer?.phone || "").replace(/\D/g, "")
     const email: string | null = customer?.email || null
     const fullName: string | null = customer?.name || null
 
     if (!documentNumber) {
-      return NextResponse.json(
-        { ok: false, error: "CPF obrigatório" },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
     }
 
     // -------------------------------------------------
-    // USER (CPF SEMPRE DOMINANTE)
+    // USER (CPF DOMINANTE)
     // -------------------------------------------------
     const orConditions: any[] = [{ cpf: documentNumber }]
     if (email) orConditions.push({ email })
 
-    let user = await prisma.user.findFirst({
-      where: { OR: orConditions },
-    })
+    let user = await prisma.user.findFirst({ where: { OR: orConditions } })
 
     if (!user) {
       try {
@@ -173,14 +225,11 @@ export async function POST(req: Request) {
     if (!user) throw new Error("Usuário não encontrado")
 
     // -------------------------------------------------
-    // IDEMPOTÊNCIA:
-    // - Reaproveita pedido PENDENTE recente (mesmo CPF + mesmo valor)
-    // - Se já tiver PAGO recente, retorna "paid" (front redireciona)
+    // IDEMPOTÊNCIA
     // -------------------------------------------------
     const now = Date.now()
     const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
 
-    // 1) Se tiver pedido PAGO recente com esse valor, evita gerar novo
     const recentPaid = await prisma.order.findFirst({
       where: {
         userId: user.id,
@@ -204,7 +253,6 @@ export async function POST(req: Request) {
       )
     }
 
-    // 2) Se tiver pedido PENDENTE recente com esse valor, reaproveita (não cria outro)
     const recentPending = await prisma.order.findFirst({
       where: {
         userId: user.id,
@@ -213,16 +261,25 @@ export async function POST(req: Request) {
         createdAt: { gte: since },
       },
       orderBy: { createdAt: "desc" },
-      include: {
-        transactions: { orderBy: { createdAt: "desc" } },
-      },
+      include: { transactions: { orderBy: { createdAt: "desc" } } },
     })
 
+    // -------------------------------------------------
+    // REUSO: se tiver um pending com pix + gatewayId válido -> reutiliza
+    // (se não tiver gatewayId, NÃO reutiliza — evita PIX fantasma)
+    // -------------------------------------------------
     if (recentPending) {
       const existingTx = recentPending.transactions?.[0] || null
 
-      // Se já existe transaction com pix, retorna a mesma
-      if (existingTx?.pixCopiaCola) {
+      if (canReuseExistingTx(existingTx)) {
+        if (!isProduction) {
+          console.log("[pix] Reusando tx existente (OK):", {
+            orderId: recentPending.id,
+            txDbId: existingTx.id,
+            gatewayId: existingTx.gatewayId,
+          })
+        }
+
         return NextResponse.json(
           {
             ok: true,
@@ -238,7 +295,14 @@ export async function POST(req: Request) {
         )
       }
 
-      // Se existe pedido pendente mas sem transação/pix, cria só a transação e reaproveita o pedido
+      if (existingTx?.pixCopiaCola && !isProduction) {
+        console.warn("[pix] NÃO reutilizando tx antigo (suspeito/sem gatewayId). Vou regenerar:", {
+          orderId: recentPending.id,
+          txDbId: existingTx.id,
+          gatewayId: existingTx.gatewayId || null,
+        })
+      }
+
       const fbEventId = recentPending.metaEventId || crypto.randomUUID()
 
       const resp = await createPixTransaction({
@@ -262,35 +326,47 @@ export async function POST(req: Request) {
         traceable: true,
       })
 
-      const {
-        pixCopiaECola,
-        qrCodeBase64,
-        expiresAt,
-        transactionId: gatewayTransactionId,
-        raw,
-      } = resp as any
+      const { pixCopiaECola, qrCodeBase64, expiresAt, raw } = resp as any
 
-      const gatewayId =
-        gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+      if (!pixCopiaECola) {
+        return pixUnavailableResponse({
+          stage: "recreate_pending",
+          orderId: recentPending.id,
+          gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+          raw: isProduction ? undefined : raw,
+        })
+      }
 
-      // ✅ agora é JsonB (Transaction.meta)
-      const meta = {
+      const gatewayId = resolveGatewayId(resp)
+      if (!gatewayId) {
+        return pixUnavailableResponse({
+          stage: "recreate_pending_missing_txid",
+          orderId: recentPending.id,
+          raw: isProduction ? undefined : raw,
+        })
+      }
+
+      const meta = buildMetaString({
         fbp,
         fbc,
         clientIpAddress,
-        clientUserAgent: userAgent,
+        userAgent,
         createdFrom: isUpsell ? "upsell" : "main",
-        createdAt: new Date().toISOString(),
-      }
+        provider: {
+          id: gatewayId,
+          gatewayId: gatewayId,
+          externalRef: recentPending.id,
+        },
+      })
 
-      const transaction = await prisma.transaction.create({
+      const tx = await prisma.transaction.create({
         data: {
           orderId: recentPending.id,
           value: amountInCents / 100,
           status: "pending",
           gatewayId,
-          pixCopiaCola: pixCopiaECola || null,
-          meta, // ✅
+          pixCopiaCola: pixCopiaECola,
+          meta,
         },
       })
 
@@ -299,7 +375,7 @@ export async function POST(req: Request) {
           ok: true,
           reused: true,
           orderId: recentPending.id,
-          transactionId: transaction.id,
+          transactionId: tx.id,
           pixCopiaECola,
           qrCodeBase64,
           expiresAt,
@@ -310,13 +386,10 @@ export async function POST(req: Request) {
     }
 
     // -------------------------------------------------
-    // META EVENT ID (novo pedido)
+    // NOVO PEDIDO
     // -------------------------------------------------
     const fbEventId = crypto.randomUUID()
 
-    // -------------------------------------------------
-    // ORDER (novo)
-    // -------------------------------------------------
     const order = await prisma.order.create({
       data: {
         userId: user.id,
@@ -327,9 +400,6 @@ export async function POST(req: Request) {
       },
     })
 
-    // -------------------------------------------------
-    // PUSHCUT – PEDIDO GERADO (somente se for novo)
-    // -------------------------------------------------
     if (PUSHCUT_ORDER_CREATED_URL) {
       await sendPushcutNotification(PUSHCUT_ORDER_CREATED_URL, {
         title: `+1 ( R$ ${(amountInCents / 100).toFixed(2).replace(".", ",")} ) RF [ P.Z ]`,
@@ -340,19 +410,13 @@ export async function POST(req: Request) {
       })
     }
 
-    // -------------------------------------------------
-    // ATIVOPAY
-    // -------------------------------------------------
     const resp = await createPixTransaction({
       amount: amountInCents,
       customer: {
         name: fullName || "Cliente",
         email: email || "cliente@example.com",
         phone,
-        document: {
-          type: "CPF",
-          number: documentNumber,
-        },
+        document: { type: "CPF", number: documentNumber },
       },
       items: [
         {
@@ -367,48 +431,55 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const {
-      pixCopiaECola,
-      qrCodeBase64,
-      expiresAt,
-      transactionId: gatewayTransactionId,
-      raw,
-    } = resp as any
+    const { pixCopiaECola, qrCodeBase64, expiresAt, raw } = resp as any
 
-    const gatewayId =
-      gatewayTransactionId || raw?.data?.id || raw?.transactionId || ""
+    if (!pixCopiaECola) {
+      return pixUnavailableResponse({
+        stage: "create_new",
+        orderId: order.id,
+        gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+        raw: isProduction ? undefined : raw,
+      })
+    }
 
-    // -------------------------------------------------
-    // TRANSACTION (CRÍTICO)
-    // -------------------------------------------------
-    const meta = {
+    const gatewayId = resolveGatewayId(resp)
+    if (!gatewayId) {
+      return pixUnavailableResponse({
+        stage: "create_new_missing_txid",
+        orderId: order.id,
+        raw: isProduction ? undefined : raw,
+      })
+    }
+
+    const meta = buildMetaString({
       fbp,
       fbc,
       clientIpAddress,
-      clientUserAgent: userAgent,
+      userAgent,
       createdFrom: isUpsell ? "upsell" : "main",
-      createdAt: new Date().toISOString(),
-    }
+      provider: {
+        id: gatewayId,
+        gatewayId: gatewayId,
+        externalRef: order.id,
+      },
+    })
 
-    const transaction = await prisma.transaction.create({
+    const tx = await prisma.transaction.create({
       data: {
         orderId: order.id,
         value: amountInCents / 100,
         status: "pending",
         gatewayId,
-        pixCopiaCola: pixCopiaECola || null,
-        meta, // ✅
+        pixCopiaCola: pixCopiaECola,
+        meta,
       },
     })
 
-    // -------------------------------------------------
-    // RESPONSE PARA O FRONT
-    // -------------------------------------------------
     return NextResponse.json(
       {
         ok: true,
         orderId: order.id,
-        transactionId: transaction.id, // 🔥 ESSENCIAL
+        transactionId: tx.id,
         pixCopiaECola,
         qrCodeBase64,
         expiresAt,
@@ -418,9 +489,6 @@ export async function POST(req: Request) {
     )
   } catch (err) {
     console.error("ERRO /api/pagamento/pix:", err)
-    return NextResponse.json(
-      { ok: false, error: "Erro ao processar pagamento" },
-      { status: 500 },
-    )
+    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
   }
 }

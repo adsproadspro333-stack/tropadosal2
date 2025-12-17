@@ -41,7 +41,6 @@ const UPSELL_OPTIONS = [
     label: "10x Mais Sorte",
     qty: 100,
     priceCents: 990,
-    // ✅ mais claro e direto
     note: "Adicione números extras agora, sem refazer pagamento.",
     badge: "Rápido",
     badgeTone: "neutral" as const,
@@ -78,9 +77,24 @@ function coerceNumbersFromOrder(order: OrderDTO | null) {
 }
 
 function formatQtyLabel(qty: number) {
-  // ✅ microcopy certeira
   if (!Number.isFinite(qty) || qty <= 0) return "+0 números"
   return `+${qty} números extras`
+}
+
+function safeNumber(n: any) {
+  const v = Number(n)
+  return Number.isFinite(v) ? v : 0
+}
+
+function getStorageKey(prefix: string, orderId: string) {
+  return `${prefix}:${orderId}`
+}
+
+// Tipagem mínima do fbq sem depender de lib
+declare global {
+  interface Window {
+    fbq?: (...args: any[]) => void
+  }
 }
 
 export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) {
@@ -130,6 +144,63 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     load()
   }, [orderIdFromSearch])
 
+  // ✅ Dispara Purchase no browser (fbq) com dedupe por event_id
+  useEffect(() => {
+    if (!order?.id) return
+
+    const eventId = String(order.metaEventId || order.id)
+    const orderId = String(order.id)
+
+    // trava de dedupe no browser (evita refresh/voltar duplicar)
+    const sentKey = getStorageKey("fbq_purchase_sent", orderId)
+    const retryKey = getStorageKey("capi_purchase_retry_called", orderId)
+
+    function firePurchaseOnce() {
+      try {
+        if (typeof window === "undefined") return
+        if (!window.fbq) return
+
+        const already = sessionStorage.getItem(sentKey)
+        if (already) return
+
+        const value = safeNumber(order.amount)
+
+        // ✅ Purchase com eventID (dedupe com CAPI)
+        window.fbq("track", "Purchase", { value, currency: "BRL" }, { eventID: eventId })
+
+        sessionStorage.setItem(sentKey, "1")
+        // opcional: também marca no localStorage pra persistir mais
+        // localStorage.setItem(sentKey, "1")
+      } catch (e) {
+        // não quebra UX
+        console.error("fbq Purchase error:", e)
+      }
+    }
+
+    async function retryCapiPurchase() {
+      try {
+        if (typeof window === "undefined") return
+        const already = sessionStorage.getItem(retryKey)
+        if (already) return
+
+        // chama endpoint interno (fallback). Se não existir, apenas falha silenciosamente.
+        await fetch("/api/meta/purchase-retry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderId }),
+        })
+
+        sessionStorage.setItem(retryKey, "1")
+      } catch (e) {
+        // não quebra UX (endpoint pode ainda não existir)
+        console.log("CAPI retry skipped/failed:", e)
+      }
+    }
+
+    firePurchaseOnce()
+    retryCapiPurchase()
+  }, [order])
+
   const numbers = useMemo(() => coerceNumbersFromOrder(order), [order])
   const numbersPreview = useMemo(() => numbers.slice(0, 8), [numbers])
   const hasNumbersPreview = numbersPreview.length > 0
@@ -139,10 +210,8 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const GLASS = "rgba(255,255,255,0.06)"
   const GLASS_SOFT = "rgba(255,255,255,0.04)"
   const BORDER = "rgba(255,255,255,0.10)"
-  const TXT = "rgba(255,255,255,0.92)"
   const MUTED = "rgba(255,255,255,0.68)"
   const GREEN = "#22C55E"
-  const GREEN_DARK = "#16A34A"
   const RED = "#DC2626"
   const RED_DARK = "#B91C1C"
 
@@ -422,7 +491,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                       ? opt.id === "dominator"
                         ? "rgba(26,7,7,0.90)"
                         : "rgba(220,38,38,0.10)"
-                      : GLASS_SOFT,
+                      : "rgba(255,255,255,0.04)",
                     transition:
                       "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease",
                     transform: active ? "translateY(-1px)" : "translateY(0)",
@@ -432,7 +501,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     overflow: "hidden",
                   }}
                 >
-                  {/* topo: título + preço */}
                   <Box
                     sx={{
                       display: "flex",
@@ -446,7 +514,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         {opt.label}
                       </Typography>
 
-                      {/* ✅ CLAREZA MÁXIMA: quantos números ganha */}
                       <Typography
                         sx={{
                           mt: 0.55,
@@ -458,7 +525,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         {formatQtyLabel(opt.qty)}
                       </Typography>
 
-                      {/* badge abaixo (sem poluir preço) */}
                       <Box sx={{ mt: 0.8, display: "flex", gap: 0.7, flexWrap: "wrap" }}>
                         <Box
                           sx={{
@@ -476,7 +542,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                       </Box>
                     </Box>
 
-                    {/* ✅ PREÇO VERMELHO FORTE */}
                     <Typography
                       sx={{
                         fontWeight: 1000,

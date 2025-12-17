@@ -39,18 +39,19 @@ model Order {
 }
 
 model Transaction {
-  id           String   @id @default(uuid())
-  orderId      String
-  value        Float
-  status       String   @default("pending")
-  gatewayId    String?
+  id      String @id @default(uuid())
+  orderId String
+  value   Float
+  status  String @default("pending")
+
+  // ✅ MWBank txid/idTransaction precisa ser único no banco (anti duplicação / anti pix fantasma)
+  gatewayId String? @unique
+
   createdAt    DateTime @default(now())
   pixCopiaCola String?  @map("pixcopiacola")
+  meta         String?  @db.Text
 
-  // ✅ NOVO: guarda _fbp/_fbc/ip/ua/extra (opcional, não quebra nada)
-  meta         Json?    @db.JsonB
-
-  order        Order    @relation(fields: [orderId], references: [id])
+  order Order @relation(fields: [orderId], references: [id])
 
   @@index([orderId])
   @@index([status])

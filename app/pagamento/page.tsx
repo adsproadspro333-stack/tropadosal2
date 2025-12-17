@@ -1,7 +1,7 @@
 // app/pagamento/page.tsx
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   Container,
@@ -38,7 +38,7 @@ type OrderDTO = { id: string; amount: number; quantity: number }
 // 🔒 Anti-duplicidade / Persistência
 // ===============================
 const LS_PENDING_KEY = "pix_pending_payload_v1"
-const PENDING_TTL_MS = 20 * 60 * 1000 // 20 min (seguro p/ evitar pedido duplo)
+const PENDING_TTL_MS = 20 * 60 * 1000 // 20 min
 
 type PendingPixCache = {
   orderId: string | null
@@ -46,7 +46,10 @@ type PendingPixCache = {
   pixPayload: string
   amount: number // em reais
   qty: number
-  createdAt: number // Date.now()
+  createdAt: number
+  // ✅ NOVO: trava rígida pra não reutilizar pix de outro CPF/valor/qtd
+  cacheKey?: string
+  cpf?: string // somente dígitos (não é obrigatório, serve pra debug local)
 }
 
 function safeJsonParse<T>(value: string | null): T | null {
@@ -68,6 +71,27 @@ function isPendingValid(p: PendingPixCache | null) {
 function clearPendingPixCache() {
   if (typeof window === "undefined") return
   localStorage.removeItem(LS_PENDING_KEY)
+}
+
+function normalizeCpfDigits(cpf: any) {
+  return String(cpf || "").replace(/\D/g, "")
+}
+
+function getCheckoutCustomerCpf() {
+  if (typeof window === "undefined") return ""
+  const raw = localStorage.getItem("checkoutCustomer")
+  if (!raw) return ""
+  const parsed = safeJsonParse<any>(raw)
+  const cpf = parsed?.cpf || parsed?.documentNumber || parsed?.document || ""
+  return normalizeCpfDigits(cpf)
+}
+
+function buildPixCacheKey(input: { cpf: string; amountInCents: number; qty: number; orderIdFromUrl?: string | null }) {
+  const cpf = normalizeCpfDigits(input.cpf)
+  const amountInCents = Math.max(0, Math.round(Number(input.amountInCents || 0)))
+  const qty = Math.max(0, Math.round(Number(input.qty || 0)))
+  const order = (input.orderIdFromUrl || "").trim()
+  return `cpf:${cpf}|amt:${amountInCents}|qty:${qty}|order:${order}`
 }
 
 // ===============================
@@ -106,22 +130,55 @@ export default function PagamentoPage() {
   const unitPrice = UNIT_PRICE_CENTS / 100
 
   // ===========================================
-  // 0) Se existir PIX pendente salvo, REUSAR
+  // 0) Validação rígida do cache pendente (CPF + valor + qty + orderId)
+  //    Se não bater, limpa e libera gerar de novo.
   // ===========================================
   useEffect(() => {
     if (typeof window === "undefined") return
 
     const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
     if (!isPendingValid(pending)) {
-      // limpa lixo velho
       clearPendingPixCache()
       return
     }
 
-    // Se já chegou aqui com ?orderId diferente, não reaproveita pra não confundir
-    if (orderIdFromUrl && pending?.orderId && orderIdFromUrl !== pending.orderId) return
+    const cpf = getCheckoutCustomerCpf()
+    const currentKey = buildPixCacheKey({
+      cpf,
+      amountInCents: Math.round(resolved.amount * 100),
+      qty: resolved.qty,
+      orderIdFromUrl,
+    })
 
-    // Se não tem pix na tela ainda, carrega do cache
+    // ✅ se o cache antigo não tem cacheKey, a gente considera inseguro e limpa (evita “grudar” em pix antigo)
+    if (!pending?.cacheKey) {
+      clearPendingPixCache()
+      return
+    }
+
+    // ✅ se o orderId na URL existe e não bate com o pendente, não reutiliza
+    if (orderIdFromUrl && pending?.orderId && orderIdFromUrl !== pending.orderId) {
+      // não limpa aqui porque pode ser caso raro de voltar em outra order,
+      // mas também não pode reutilizar.
+      return
+    }
+
+    // ✅ se o cacheKey não bater, é outro CPF/valor/qty => LIMPA e reseta estado
+    if (pending.cacheKey !== currentKey) {
+      clearPendingPixCache()
+
+      // reseta estados pra não “grudar” no PIX antigo
+      setPixPayload("")
+      setTransactionId(null)
+      setError(null)
+      setLoading(true)
+
+      // MUITO IMPORTANTE: libera gerar de novo (StrictMode/ref)
+      pixRequestedRef.current = false
+      return
+    }
+
+    // ✅ Reuso seguro (cacheKey bate)
     if (!pixPayload && !transactionId) {
       setResolved({ amount: pending.amount, qty: pending.qty })
       setPixPayload(pending.pixPayload)
@@ -130,7 +187,7 @@ export default function PagamentoPage() {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderIdFromUrl])
+  }, [orderIdFromUrl, resolved.amount, resolved.qty])
 
   // 1) Se tiver orderId na URL, tenta carregar do backend (somente pra resolver valores)
   useEffect(() => {
@@ -156,16 +213,14 @@ export default function PagamentoPage() {
     loadOrderData()
   }, [orderIdFromUrl, totalInCents, qty])
 
-  // 2) Geração do PIX (com trava + anti duplicidade)
+  // 2) Geração do PIX
   useEffect(() => {
-    // se já tem pix (reaproveitado do cache), não gera outro
     if (pixPayload && transactionId) {
       setLoading(false)
       return
     }
 
-    const customerData =
-      typeof window !== "undefined" ? localStorage.getItem("checkoutCustomer") : null
+    const customerData = typeof window !== "undefined" ? localStorage.getItem("checkoutCustomer") : null
 
     if (!customerData) {
       router.replace("/dados")
@@ -176,16 +231,32 @@ export default function PagamentoPage() {
       return
     }
 
-    // ✅ Se existe pendente válido, REUSA e sai
+    const customerParsed = safeJsonParse<any>(customerData)
+    const cpfNow = normalizeCpfDigits(customerParsed?.cpf || customerParsed?.documentNumber || "")
+    const totalInCentsToSend = Math.round(resolved.amount * 100)
+
+    const currentKey = buildPixCacheKey({
+      cpf: cpfNow,
+      amountInCents: totalInCentsToSend,
+      qty: resolved.qty,
+      orderIdFromUrl,
+    })
+
+    // ✅ Se existe pendente válido, SÓ REUSA se bater cacheKey
     if (typeof window !== "undefined") {
       const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
       if (isPendingValid(pending)) {
-        setResolved({ amount: pending!.amount, qty: pending!.qty })
-        setPixPayload(pending!.pixPayload)
-        setTransactionId(pending!.transactionId)
-        setOrderId(pending!.orderId || orderIdFromUrl || null)
-        setLoading(false)
-        return
+        // se não tiver cacheKey ou não bater, limpa (não reaproveitar lixo)
+        if (!pending?.cacheKey || pending.cacheKey !== currentKey) {
+          clearPendingPixCache()
+        } else {
+          setResolved({ amount: pending!.amount, qty: pending!.qty })
+          setPixPayload(pending!.pixPayload)
+          setTransactionId(pending!.transactionId)
+          setOrderId(pending!.orderId || orderIdFromUrl || null)
+          setLoading(false)
+          return
+        }
       }
     }
 
@@ -195,15 +266,17 @@ export default function PagamentoPage() {
     const generatePix = async () => {
       try {
         const customer = JSON.parse(customerData)
-        const totalInCentsToSend = Math.round(resolved.amount * 100)
+        const totalInCentsToSendInner = Math.round(resolved.amount * 100)
 
         const response = await fetch("/api/pagamento/pix", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             quantity: resolved.qty,
-            totalInCents: totalInCentsToSend,
+            totalInCents: totalInCentsToSendInner,
             itemTitle: `${resolved.qty} números`,
+            // ✅ se o backend quiser amarrar num order existente
+            orderId: orderIdFromUrl || null,
             customer: {
               name: customer.nome,
               email: customer.email,
@@ -228,16 +301,41 @@ export default function PagamentoPage() {
           data.qr_code ??
           null
 
+        // ✅ IMPORTANTE: transactionId precisa ser o ID REAL do gateway (txid)
+        const txId: string | null =
+          data.transactionId ??
+          data.gatewayId ??
+          data.txid ??
+          data.provider?.id ??
+          data.provider?.gatewayId ??
+          null
+
+        // Log curto pra depurar (sem expor payload)
+        try {
+          console.log("[pagamento] PIX API OK:", {
+            ok: data.ok,
+            hasCopiaECola: !!copiaECola,
+            txIdPrefix: txId ? String(txId).slice(0, 8) : null,
+            orderId: data.orderId || orderIdFromUrl || null,
+            cacheKeyPrefix: currentKey.slice(0, 32),
+          })
+        } catch {}
+
         if (!copiaECola) {
-          console.error("Resposta da API PIX sem copia e cola:", data)
-          throw new Error("PIX gerado, mas o código de pagamento não foi retornado pela API.")
+          console.error("[pagamento] Resposta da API PIX sem copia e cola:", data)
+          throw new Error("PIX não retornou o código Copia e Cola.")
         }
 
-        const txId = data.transactionId || data.id || null
-        setPixPayload(copiaECola)
-        setTransactionId(txId)
+        // 🚨 Se não veio txid, não aceitamos: isso vira “QR fantasma”
+        if (!txId) {
+          console.error("[pagamento] PIX veio sem txid/gatewayId. Resposta:", data)
+          throw new Error("PIX retornou QR, mas não retornou txid do gateway (transação não confirmada).")
+        }
 
-        // 🔗 guarda eventId pra dedup
+        setPixPayload(copiaECola)
+        setTransactionId(String(txId))
+
+        // 🔗 guarda eventId
         const fbEventIdFromApi = data.fbEventId || data.metaEventId
         if (fbEventIdFromApi && typeof window !== "undefined") {
           window.localStorage.setItem("lastFbEventId", String(fbEventIdFromApi))
@@ -251,15 +349,17 @@ export default function PagamentoPage() {
           }
         }
 
-        // ✅ salva cache pendente (anti pedido duplo)
+        // ✅ salva cache pendente COM cacheKey rígido (CPF + valor + qty + order)
         if (typeof window !== "undefined") {
           const cache: PendingPixCache = {
             orderId: newOrderId,
-            transactionId: txId,
+            transactionId: String(txId),
             pixPayload: copiaECola,
             amount: resolved.amount,
             qty: resolved.qty,
             createdAt: Date.now(),
+            cacheKey: currentKey,
+            cpf: cpfNow || null,
           }
           localStorage.setItem(LS_PENDING_KEY, JSON.stringify(cache))
         }
@@ -267,8 +367,13 @@ export default function PagamentoPage() {
         setLoading(false)
       } catch (err: any) {
         console.error("Erro ao gerar PIX:", err)
+        // Se falhou, limpa cache pendente pra não reaproveitar lixo
+        clearPendingPixCache()
         setError(err.message || "Erro ao gerar PIX")
         setLoading(false)
+
+        // libera novo request numa tentativa futura (sem travar pra sempre)
+        pixRequestedRef.current = false
       }
     }
 
@@ -287,9 +392,7 @@ export default function PagamentoPage() {
         clearInterval(interval)
         setTimeRemaining("00:00")
       } else {
-        setTimeRemaining(
-          `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`,
-        )
+        setTimeRemaining(`${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`)
       }
     }, 1000)
 
@@ -308,17 +411,12 @@ export default function PagamentoPage() {
 
     if (data.status === "paid") {
       paidRedirectedRef.current = true
-
-      // ✅ limpa cache pendente (pra não travar próximas compras)
       clearPendingPixCache()
 
       let finalOrderId: string | null = data.orderId || orderId || null
 
       if (!finalOrderId && typeof window !== "undefined") {
-        finalOrderId =
-          localStorage.getItem("lastOrderId") ||
-          localStorage.getItem("lastPaidOrderId") ||
-          null
+        finalOrderId = localStorage.getItem("lastOrderId") || localStorage.getItem("lastPaidOrderId") || null
       }
 
       if (finalOrderId && typeof window !== "undefined") {
@@ -330,7 +428,7 @@ export default function PagamentoPage() {
     }
   }
 
-  // 3) Polling: agressivo no começo (3s) e depois 5s
+  // 3) Polling
   useEffect(() => {
     if (!transactionId) return
 
@@ -345,19 +443,17 @@ export default function PagamentoPage() {
 
     const interval = setInterval(() => {
       elapsed += 1
-      // a cada 1s a gente só controla o timing
       const every = elapsed <= 45 ? 3 : 5
       if (elapsed % every === 0) tick()
     }, 1000)
 
-    // checa imediatamente ao entrar
     tick()
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionId, router, orderId])
 
-  // 4) Checar ao voltar pra aba / focar (resolve “paguei e voltei”)
+  // 4) Checar ao voltar pra aba
   useEffect(() => {
     if (!transactionId) return
 
@@ -434,7 +530,6 @@ export default function PagamentoPage() {
     }
   }
 
-  // ---------- Loading ----------
   if (loading) {
     return (
       <Box
@@ -460,7 +555,6 @@ export default function PagamentoPage() {
     )
   }
 
-  // ---------- Error ----------
   if (error) {
     return (
       <Box sx={{ bgcolor: "#0B0F19", minHeight: "100vh", pb: 4 }}>
@@ -501,7 +595,7 @@ export default function PagamentoPage() {
               </Stack>
 
               <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
-                Isso pode acontecer quando o emissor do PIX está instável. Seus dados continuam seguros — tente novamente em instantes.
+                Se o gateway retornar QR mas sem txid, consideramos inválido e bloqueamos pra evitar “PIX fantasma”.
               </Typography>
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
@@ -547,7 +641,6 @@ export default function PagamentoPage() {
     )
   }
 
-  // ---------- UI ----------
   return (
     <Box
       sx={{
@@ -624,7 +717,7 @@ export default function PagamentoPage() {
           />
         </Paper>
 
-        {/* CONFIRMAÇÃO AUTOMÁTICA (ANTI ANSIEDADE + ANTI DUPLICIDADE) */}
+        {/* CONFIRMAÇÃO AUTOMÁTICA */}
         <Paper
           elevation={0}
           sx={{
@@ -740,7 +833,6 @@ export default function PagamentoPage() {
             p: { xs: 2.1, sm: 3 },
           }}
         >
-          {/* Cabeçalho */}
           <Stack alignItems="center" spacing={0.9} sx={{ mb: 2.2 }}>
             <Box
               sx={{
@@ -782,7 +874,6 @@ export default function PagamentoPage() {
 
           <Divider sx={{ borderColor: "rgba(255,255,255,0.10)", mb: 2 }} />
 
-          {/* Como pagar */}
           <Box sx={{ mb: 2 }}>
             <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem", mb: 1.2 }}>
               Como pagar com PIX
@@ -828,7 +919,6 @@ export default function PagamentoPage() {
             </Stack>
           </Box>
 
-          {/* Botões */}
           <Stack spacing={1.1} sx={{ mt: 2 }}>
             <Button
               variant="contained"
@@ -871,7 +961,6 @@ export default function PagamentoPage() {
             </Button>
           </Stack>
 
-          {/* Aviso */}
           <Box sx={{ mt: 2.2, pt: 1.4, borderTop: "1px dashed rgba(255,255,255,0.18)" }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
@@ -885,11 +974,10 @@ export default function PagamentoPage() {
         </Paper>
       </Container>
 
-      {/* Modal QR Code */}
-      <Dialog open={qrCodeDialogOpen} onClose={handleCloseQRCode} maxWidth="xs" fullWidth>
+      <Dialog open={qrCodeDialogOpen} onClose={() => setQrCodeDialogOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle sx={{ textAlign: "center", fontWeight: 900, pb: 1 }}>
           QR Code PIX
-          <IconButton onClick={handleCloseQRCode} sx={{ position: "absolute", right: 8, top: 8 }}>
+          <IconButton onClick={() => setQrCodeDialogOpen(false)} sx={{ position: "absolute", right: 8, top: 8 }}>
             <CloseIcon />
           </IconButton>
         </DialogTitle>
@@ -919,13 +1007,17 @@ export default function PagamentoPage() {
           </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: "center", pb: 2.5 }}>
-          <Button onClick={handleCloseQRCode} variant="outlined" size="medium" sx={{ minWidth: 120, borderRadius: 999 }}>
+          <Button
+            onClick={() => setQrCodeDialogOpen(false)}
+            variant="outlined"
+            size="medium"
+            sx={{ minWidth: 120, borderRadius: 999 }}
+          >
             Fechar
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar */}
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={4000}
