@@ -48,12 +48,6 @@ function normalizeDigits(v: any) {
   return String(v || "").replace(/\D/g, "")
 }
 
-function maskCpfLast4(cpf: string) {
-  const d = normalizeDigits(cpf)
-  if (!d) return "unknown"
-  return d.length >= 4 ? `***${d.slice(-4)}` : "***"
-}
-
 function buildIntentKey(input: {
   createdFrom: "main" | "upsell"
   cpf: string
@@ -119,23 +113,11 @@ function buildMetaString(input: {
   return JSON.stringify(obj)
 }
 
-function pixUnavailableResponse(params: {
-  requestId: string
-  extra?: any
-}) {
-  const { requestId, extra } = params
-  // ✅ loga também em prod (sem dados sensíveis)
-  console.error("[pix] PIX indisponível agora:", {
-    requestId,
-    ...(extra ? { extra } : {}),
-  })
-
+function pixUnavailableResponse(extra?: any) {
+  // ✅ agora loga em prod também (sem vazar payload gigante)
+  console.error("[pix] PIX indisponível agora:", extra)
   return NextResponse.json(
-    {
-      ok: false,
-      error: "PIX indisponível no momento. Tente novamente em instantes.",
-      requestId, // ✅ ajuda debug no front/console
-    },
+    { ok: false, error: "PIX indisponível no momento. Tente novamente em instantes." },
     { status: 503 },
   )
 }
@@ -178,24 +160,82 @@ function resolveGatewayId(resp: any) {
   return s || null
 }
 
+// ✅ DEEP SEARCH: acha BR Code Pix em qualquer lugar do JSON (procura por "000201")
+function deepFindPixBrCode(obj: any): string | null {
+  const seen = new Set<any>()
+
+  const looksLikePix = (s: string) => {
+    const v = String(s || "").trim()
+    // Pix "copia e cola" (EMV) quase sempre começa com 000201
+    if (!v) return false
+    if (v.length < 40) return false
+    return v.startsWith("000201") || v.includes("000201")
+  }
+
+  const visit = (node: any): string | null => {
+    if (node === null || node === undefined) return null
+    if (typeof node === "string") {
+      const v = node.trim()
+      if (looksLikePix(v)) return v.startsWith("000201") ? v : v.slice(v.indexOf("000201"))
+      return null
+    }
+    if (typeof node !== "object") return null
+    if (seen.has(node)) return null
+    seen.add(node)
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = visit(item)
+        if (found) return found
+      }
+      return null
+    }
+
+    for (const k of Object.keys(node)) {
+      const found = visit(node[k])
+      if (found) return found
+    }
+    return null
+  }
+
+  return visit(obj)
+}
+
+// ✅ resolve Copia e Cola em múltiplos formatos + deep search
 function resolvePixCopiaECola(resp: any) {
   const v =
     resp?.pixCopiaECola ??
     resp?.copiaECola ??
     resp?.copia_e_cola ??
     resp?.brCode ??
+    resp?.br_code ??
+    resp?.emv ??
     resp?.payload ??
+    resp?.copyPaste ??
+    resp?.copy_paste ??
     resp?.pix?.copiaECola ??
     resp?.pix?.copia_e_cola ??
+    resp?.pix?.brCode ??
+    resp?.pix?.payload ??
     resp?.raw?.data?.pixCopiaECola ??
     resp?.raw?.data?.copia_e_cola ??
     resp?.raw?.data?.brCode ??
+    resp?.raw?.data?.br_code ??
+    resp?.raw?.data?.emv ??
+    resp?.raw?.data?.payload ??
     resp?.raw?.pixCopiaECola ??
     resp?.raw?.copia_e_cola ??
+    resp?.raw?.brCode ??
+    resp?.raw?.br_code ??
+    resp?.raw?.payload ??
     null
 
   const s = String(v || "").trim()
-  return s || null
+  if (s) return s
+
+  // ✅ fallback final: caça o BR Code no JSON inteiro
+  const deep = deepFindPixBrCode(resp?.raw ?? resp)
+  return deep ? String(deep).trim() : null
 }
 
 function canReuseExistingTx(existingTx: any) {
@@ -225,7 +265,7 @@ async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: string; isUpsell: boolean; upsellSource?: string }) {
+async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: string; isUpsell: boolean }) {
   const maxAttempts = 2
   let lastErr: any = null
 
@@ -241,10 +281,9 @@ async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: 
         requestId: ctx.requestId,
         orderId: ctx.orderId,
         isUpsell: ctx.isUpsell,
-        upsellSource: ctx.upsellSource || "",
         attempt,
         provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
-        message: c.rawMessage?.slice(0, 500),
+        message: c.rawMessage?.slice(0, 400),
       })
 
       if (c.isUnauthorized) break
@@ -343,10 +382,7 @@ export async function POST(req: Request) {
 
     const createdFrom: "main" | "upsell" = isUpsell ? "upsell" : "main"
 
-    // ✅ origem do upsell (ajuda debug e future rules)
     const upsellSource = String(body?.source || body?.origin || body?.context || body?.from || "").toLowerCase()
-
-    // ✅ flags (por padrão: upsell SEM dedupe/reuso)
     const allowUpsellReuse = Boolean(body?.allowUpsellReuse === true || body?.dedupeUpsell === true)
 
     const baseOrderIdRaw =
@@ -359,15 +395,10 @@ export async function POST(req: Request) {
     const providedOrderIdRaw = body?.orderId ?? body?.order_id ?? null
     const providedOrderIdStr = String(providedOrderIdRaw || "").trim() || null
 
-    // ✅ IMPORTANTÍSSIMO:
-    // - no upsell do "Minhas Compras", geralmente vem só orderId => usamos isso como baseOrderId
     const baseOrderIdStr = String(baseOrderIdRaw || "").trim() || null
     const baseOrderId = isUpsell ? (baseOrderIdStr || providedOrderIdStr) : baseOrderIdStr
-
-    // para main pode vir orderId amarrado pela URL
     const providedOrderId = !isUpsell ? providedOrderIdStr : null
 
-    // ✅ upsell PRECISA de baseOrderId (pra não misturar pedidos)
     if (isUpsell && !baseOrderId) {
       return NextResponse.json(
         { ok: false, error: "Upsell precisa do orderId/baseOrderId do pedido base." },
@@ -379,31 +410,20 @@ export async function POST(req: Request) {
     // VALOR TOTAL
     // -------------------------------------------------
     let totalInCents = Number(body?.totalInCents ?? 0)
-
-if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
-  const rawAmount =
-    body?.amountInCents ??
-    body?.amount ??
-    body?.priceCents ??       // ✅ upsell via query
-    body?.valueCents ??       // ✅ fallback extra
-    body?.price ??            // ✅ fallback extra
-    0
-
-  const amountNum = Number(rawAmount)
-  totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
+    if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
+      const rawAmount = body?.amountInCents ?? body?.amount
+      const amountNum = Number(rawAmount)
+      totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
-
     if (!totalInCents || totalInCents <= 0) {
       return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
-
     const amountInCents = Math.round(totalInCents)
 
     // -------------------------------------------------
     // QTD (ANTI-BURLO)
     // -------------------------------------------------
     let effectiveQty = 0
-
     const bodyQty = Math.round(Number(body?.quantity || 0))
     const numbersLen = Array.isArray(body?.numbers) ? body.numbers.length : 0
 
@@ -413,7 +433,6 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       body?.extraNumbers ??
       body?.qty ??
       null
-
     const upsellQty = Math.round(Number(upsellQtyRaw || 0))
 
     if (isUpsell) {
@@ -450,19 +469,6 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
     }
 
-    // ✅ LOG INCOMING (PROD OK, SEM SENSÍVEIS)
-    console.log("[pix] incoming:", {
-      requestId,
-      createdFrom,
-      isUpsell,
-      upsellSource,
-      baseOrderId: baseOrderId || null,
-      providedOrderId: providedOrderId || null,
-      amountInCents,
-      effectiveQty,
-      cpf: maskCpfLast4(documentNumber),
-    })
-
     // -------------------------------------------------
     // USER (CPF DOMINANTE)
     // -------------------------------------------------
@@ -470,7 +476,6 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
     if (email) orConditions.push({ email })
 
     let user = await prisma.user.findFirst({ where: { OR: orConditions } })
-
     if (!user) {
       try {
         const firstName = fullName?.split(" ")[0] || null
@@ -490,12 +495,8 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
         else throw err
       }
     }
-
     if (!user) throw new Error("Usuário não encontrado")
 
-    // -------------------------------------------------
-    // IDEMPOTÊNCIA SERVER-SIDE (INTENT KEY)
-    // -------------------------------------------------
     const now = Date.now()
     const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
 
@@ -512,16 +513,6 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
     if (!isUpsell) {
       const reusableByIntent = await findReusableTxByIntent(intentKey, since)
       if (reusableByIntent) {
-        if (!isProduction) {
-          console.log("[pix] Reuso por intentKey:", {
-            requestId,
-            intentKey: intentKey.slice(0, 10) + "...",
-            orderId: reusableByIntent.orderId,
-            txDbId: reusableByIntent.id,
-            gatewayId: reusableByIntent.gatewayId || null,
-          })
-        }
-
         return NextResponse.json(
           {
             ok: true,
@@ -570,7 +561,7 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
     // -------------------------------------------------
     // REUSO pending:
     // - MAIN: pode reutilizar pending recente (refresh)
-    // - UPSELL: por padrão NÃO reutiliza (liberdade total). Só se allowUpsellReuse=true
+    // - UPSELL: por padrão NÃO reutiliza. Só se allowUpsellReuse=true
     // -------------------------------------------------
     if (!isUpsell || allowUpsellReuse) {
       const baseNeedle = isUpsell && baseOrderId ? `"baseOrderId":"${baseOrderId}"` : null
@@ -583,11 +574,7 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
           quantity: effectiveQty,
           createdAt: { gte: since },
           ...(isUpsell && baseNeedle
-            ? {
-                transactions: {
-                  some: { meta: { contains: baseNeedle } },
-                },
-              }
+            ? { transactions: { some: { meta: { contains: baseNeedle } } } }
             : {}),
         },
         orderBy: { createdAt: "desc" },
@@ -598,16 +585,6 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
         const existingTx = recentPending.transactions?.[0] || null
 
         if (canReuseExistingTx(existingTx)) {
-          if (!isProduction) {
-            console.log("[pix] Reusando tx existente (pending OK):", {
-              orderId: recentPending.id,
-              txDbId: existingTx.id,
-              gatewayId: existingTx.gatewayId || null,
-              isUpsell,
-              upsellSource,
-            })
-          }
-
           return NextResponse.json(
             {
               ok: true,
@@ -649,7 +626,7 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
               expiresInDays: 1,
               traceable: true,
             },
-            { requestId, orderId: recentPending.id, isUpsell, upsellSource },
+            { requestId, orderId: recentPending.id, isUpsell },
           )
         } catch (e: any) {
           await registerFailedTransaction({
@@ -670,15 +647,10 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
 
           const c = classifyProviderError(e)
           return pixUnavailableResponse({
+            stage: "recreate_pending_provider_error",
+            orderId: recentPending.id,
             requestId,
-            extra: {
-              stage: "recreate_pending_provider_error",
-              orderId: recentPending.id,
-              isUpsell,
-              upsellSource,
-              provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
-              message: c.rawMessage?.slice(0, 300),
-            },
+            provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
           })
         }
 
@@ -688,59 +660,40 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
         const raw = (resp as any)?.raw
 
         if (!pixCopiaECola) {
-  // ✅ MW criou a transação mas não devolveu o payload ainda
-  // Isso é NORMAL no MWBank (PIX assíncrono)
+          await registerFailedTransaction({
+            orderId: recentPending.id,
+            amountInCents,
+            createdFrom,
+            intentKey,
+            requestId,
+            fbp,
+            fbc,
+            clientIpAddress,
+            userAgent,
+            baseOrderId: isUpsell ? baseOrderId : null,
+            providedOrderId: !isUpsell ? providedOrderId : null,
+            stage: "recreate_pending_missing_copia",
+            err: new Error("PIX sem copia e cola (parser)"),
+          })
 
-  const gatewayId = resolveGatewayId(resp)
+          // ✅ log mínimo em prod (ajuda achar o campo real do MWBank)
+          console.error("[pix] missing copia (pending recreate):", {
+            requestId,
+            orderId: recentPending.id,
+            isUpsell,
+            upsellSource,
+            keys: raw ? Object.keys(raw).slice(0, 40) : null,
+          })
 
-  const meta = buildMetaString({
-    fbp,
-    fbc,
-    clientIpAddress,
-    userAgent,
-    createdFrom,
-    intentKey,
-    baseOrderId: isUpsell ? baseOrderId : null,
-    providedOrderId: !isUpsell ? providedOrderId : null,
-    requestId,
-    provider: {
-      id: gatewayId || null,
-      gatewayId: gatewayId || null,
-      externalRef: order.id,
-    },
-    debug: {
-      note: "PIX criado sem copia-e-cola (async)",
-      upsellSource,
-    },
-  })
-
-  const tx = await prisma.transaction.create({
-    data: {
-      orderId: order.id,
-      value: amountInCents / 100,
-      status: "pending",
-      gatewayId: gatewayId || null,
-      pixCopiaCola: "", // será preenchido depois se quiser
-      meta,
-    },
-  })
-
-  return NextResponse.json(
-    {
-      ok: true,
-      pending: true,
-      orderId: order.id,
-      transactionId: tx.id,
-      gatewayId: gatewayId,
-      pixCopiaECola: null,
-      qrCodeBase64: null,
-      expiresAt: null,
-      fbEventId,
-      message: "PIX gerado, aguardando confirmação",
-    },
-    { status: 200 },
-  )
-}
+          return pixUnavailableResponse({
+            stage: "recreate_pending_missing_copia",
+            orderId: recentPending.id,
+            requestId,
+            isUpsell,
+            upsellSource,
+            gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+          })
+        }
 
         const gatewayId = resolveGatewayId(resp)
 
@@ -838,7 +791,7 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
           expiresInDays: 1,
           traceable: true,
         },
-        { requestId, orderId: order.id, isUpsell, upsellSource },
+        { requestId, orderId: order.id, isUpsell },
       )
     } catch (e: any) {
       await registerFailedTransaction({
@@ -859,15 +812,10 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
 
       const c = classifyProviderError(e)
       return pixUnavailableResponse({
+        stage: "create_new_provider_error",
+        orderId: order.id,
         requestId,
-        extra: {
-          stage: "create_new_provider_error",
-          orderId: order.id,
-          isUpsell,
-          upsellSource,
-          provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
-          message: c.rawMessage?.slice(0, 300),
-        },
+        provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
       })
     }
 
@@ -890,18 +838,25 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
         baseOrderId: isUpsell ? baseOrderId : null,
         providedOrderId: !isUpsell ? providedOrderId : null,
         stage: "create_new_missing_copia",
-        err: new Error("PIX sem copia e cola"),
+        err: new Error("PIX sem copia e cola (parser)"),
+      })
+
+      console.error("[pix] missing copia (new order):", {
+        requestId,
+        orderId: order.id,
+        isUpsell,
+        upsellSource,
+        gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+        rawKeys: raw ? Object.keys(raw).slice(0, 40) : null,
       })
 
       return pixUnavailableResponse({
+        stage: "create_new_missing_copia",
+        orderId: order.id,
         requestId,
-        extra: {
-          stage: "create_new_missing_copia",
-          orderId: order.id,
-          isUpsell,
-          upsellSource,
-          gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
-        },
+        isUpsell,
+        upsellSource,
+        gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
       })
     }
 
@@ -960,18 +915,12 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
 
     if (c.isUnauthorized || c.isTimeout) {
       return pixUnavailableResponse({
+        stage: "catch_provider_error",
         requestId,
-        extra: {
-          stage: "catch_provider_error",
-          provider: c.isUnauthorized ? "unauthorized" : "timeout",
-          message: c.rawMessage?.slice(0, 300),
-        },
+        provider: c.isUnauthorized ? "unauthorized" : "timeout",
       })
     }
 
-    return NextResponse.json(
-      { ok: false, error: "Erro ao processar pagamento", requestId },
-      { status: 500 },
-    )
+    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
   }
 }
