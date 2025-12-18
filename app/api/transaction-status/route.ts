@@ -17,6 +17,9 @@ const PURCHASE_LOCK_TTL_MS = 90 * 1000 // 90s
 const MWBANK_BASE_URL = (process.env.MWBANK_BASE_URL || "https://core.mwbank.app").replace(/\/+$/, "")
 const MWBANK_CLIENT_ID = (process.env.MWBANK_CLIENT_ID || "").trim()
 
+// ✅ opcional: alguns ambientes exigem no GET/CREATE também
+const MWBANK_CLIENT_SECRET = (process.env.MWBANK_CLIENT_SECRET || "").trim()
+
 // base64 (1 linha) - pode vir com aspas, espaços, quebras ou até PEM
 const MWBANK_CERT_CLIENT_RAW = process.env.MWBANK_CERT_CLIENT
 
@@ -38,6 +41,11 @@ const MIN_TTL_SEC = 60
 type CachedToken = { token: string; expiresAt: number } // ms epoch
 let cachedToken: CachedToken | null = null
 let inFlightTokenPromise: Promise<string> | null = null
+
+function invalidateTokenCache() {
+  cachedToken = null
+  inFlightTokenPromise = null
+}
 
 function normalizeBase64OneLine(value?: string) {
   // remove quebras de linha / espaços e aspas acidentais do .env
@@ -98,6 +106,12 @@ function extractMwStatus(data: any): string | null {
     payload?.situacao ??
     null
   return status ? String(status) : null
+}
+
+function isUnauthorizedPayload(resStatus: number, data: any, text?: string) {
+  const msg =
+    (data?.error || data?.message || data?.data?.error || data?.data?.message || text || "")
+  return resStatus === 401 || String(msg).toLowerCase().includes("unauthor")
 }
 
 async function doAuthRequest(opts: {
@@ -261,33 +275,69 @@ async function getAccessToken() {
   return inFlightTokenPromise
 }
 
+function buildMwHeaders(opts: { accessToken: string; certClient?: string; clientSecret?: string }) {
+  const headers: Record<string, string> = {
+    client_id: MWBANK_CLIENT_ID,
+    Accept: "application/json",
+    Authorization: `Bearer ${opts.accessToken}`,
+  }
+
+  // ✅ muitos ambientes exigem cert_client em TODAS as rotas (não só auth)
+  if (opts.certClient) headers.cert_client = opts.certClient
+
+  // ✅ alguns exigem client_secret em TODAS as rotas
+  if (opts.clientSecret) headers.client_secret = opts.clientSecret
+
+  return headers
+}
+
 async function mwGet(url: string): Promise<{ ok: boolean; data?: any; text?: string; status: number }> {
-  const accessToken = await getAccessToken()
-  const { controller, clear } = withTimeout(MWBANK_TIMEOUT_MS)
-
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        client_id: MWBANK_CLIENT_ID,
-        Accept: "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      signal: controller.signal,
-    })
-
-    const text = await res.text()
-    if (!res.ok) return { ok: false, status: res.status, text }
+  const cert_client = normalizeCertClient(MWBANK_CERT_CLIENT_RAW)
+  const doGet = async () => {
+    const accessToken = await getAccessToken()
+    const { controller, clear } = withTimeout(MWBANK_TIMEOUT_MS)
 
     try {
-      const data = text ? JSON.parse(text) : {}
+      const res = await fetch(url, {
+        method: "GET",
+        headers: buildMwHeaders({
+          accessToken,
+          certClient: cert_client || undefined,
+          clientSecret: MWBANK_CLIENT_SECRET || undefined,
+        }),
+        signal: controller.signal,
+      })
+
+      const text = await res.text()
+
+      let data: any = null
+      try {
+        data = text ? JSON.parse(text) : {}
+      } catch {
+        data = null
+      }
+
+      // não ok
+      if (!res.ok) return { ok: false, status: res.status, text, data }
+
       return { ok: true, status: res.status, data }
-    } catch {
-      return { ok: false, status: res.status, text }
+    } finally {
+      clear()
     }
-  } finally {
-    clear()
   }
+
+  // 1) primeira tentativa
+  let r: any = await doGet()
+
+  // 2) retry 1x em 401/unauthorized (renova token)
+  if (!r.ok && isUnauthorizedPayload(r.status, r.data, r.text)) {
+    invalidateTokenCache()
+    r = await doGet()
+  }
+
+  // normaliza retorno pro resto do código
+  if (r.ok) return { ok: true, status: r.status, data: r.data }
+  return { ok: false, status: r.status, text: r.text }
 }
 
 type MwTxResult = { ok: boolean; status?: string | null; raw?: any; error?: string }
@@ -319,6 +369,10 @@ async function fetchMwTransactionStatus(txid: string): Promise<MwTxResult> {
       r1: { status: r1.status, text: r1.text?.slice?.(0, 500) },
       url2,
       r2: { status: r2.status, text: r2.text?.slice?.(0, 500) },
+      has_client_secret: !!MWBANK_CLIENT_SECRET,
+      cert_client_prefix: normalizeCertClient(MWBANK_CERT_CLIENT_RAW)
+        ? `${normalizeCertClient(MWBANK_CERT_CLIENT_RAW).slice(0, 12)}...`
+        : "",
     })
 
     return { ok: false, error: `mwbank_http_${r2.status || r1.status}`, raw: { r1, r2 } }
@@ -585,10 +639,6 @@ export async function GET(req: Request) {
     // ✅ SUPORTE DUPLO:
     // - id do Prisma (tx.id)
     // - txid/gatewayId (tx.gatewayId)
-    //
-    // Importante: NÃO retornar 404 aqui, porque o front faz:
-    // if (!res.ok) return
-    // e mata o polling/redirect.
     // ==========================================================
 
     // 1) tenta por gatewayId (txid) primeiro (pode ter múltiplas, pega a mais recente)
@@ -608,8 +658,6 @@ export async function GET(req: Request) {
 
     if (!tx) {
       console.warn("[transaction-status] Transação não encontrada (id pode ser txid ou db id):", id)
-
-      // ✅ devolve 200 pra não quebrar o polling
       return NextResponse.json(
         {
           ok: true,
@@ -654,7 +702,6 @@ export async function GET(req: Request) {
             where: { id: tx.id },
             data: {
               status: "paid",
-              // se estava vazio, preenche (ajuda demais)
               gatewayId: tx.gatewayId || txidToCheck,
             },
             include: { order: true },
@@ -699,7 +746,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      // ✅ mantém compatível com seu front (ele espera "paid")
       status: String(tx.status || "").toLowerCase(),
       orderId,
     })
