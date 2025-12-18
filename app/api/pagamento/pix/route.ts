@@ -40,9 +40,58 @@ function normalizeDigits(v: any) {
   return String(v || "").replace(/\D/g, "")
 }
 
+function normalizePhoneBR(raw: any) {
+  const d = normalizeDigits(raw)
+  if (!d) return ""
+  // Se já tiver 55 + DDD + número
+  if (d.length >= 12 && d.startsWith("55")) return d
+  // Se vier DDD + número (10/11 dígitos), prefixa 55
+  if (d.length === 10 || d.length === 11) return `55${d}`
+  // Se vier maior/menor, devolve como está (melhor que quebrar)
+  return d
+}
+
+function sha256Short(input: string) {
+  try {
+    return crypto.createHash("sha256").update(input).digest("hex").slice(0, 12)
+  } catch {
+    return "hashfail"
+  }
+}
+
+function isLikelyInstagramOrFbWebView(ua?: string) {
+  const s = String(ua || "")
+  if (!s) return false
+  // Instagram WebView costuma conter "Instagram"
+  // Facebook/FBAN/FBAV costuma aparecer em webview do app
+  return (
+    s.includes("Instagram") ||
+    s.includes("FBAN") ||
+    s.includes("FBAV") ||
+    s.includes("FB_IAB") ||
+    s.includes("FB4A") ||
+    s.includes("FBIOS")
+  )
+}
+
+function normalizeMetaId(v: any) {
+  const s = String(v || "").trim()
+  return s || undefined
+}
+
+// ✅ Gera _fbc a partir do fbclid (padrão: fb.1.<ts>.<fbclid>)
+function buildFbcFromFbclid(fbclid?: string, eventTime?: number) {
+  const c = String(fbclid || "").trim()
+  if (!c) return undefined
+  const ts = Number(eventTime || Math.floor(Date.now() / 1000))
+  if (!Number.isFinite(ts) || ts <= 0) return undefined
+  return `fb.1.${ts}.${c}`
+}
+
 function buildMetaString(input: {
   fbp?: string
   fbc?: string
+  fbclid?: string
   clientIpAddress?: string
   userAgent?: string
   createdFrom: "main" | "upsell"
@@ -59,6 +108,7 @@ function buildMetaString(input: {
   const obj: any = {
     ...(input.fbp ? { fbp: input.fbp } : {}),
     ...(input.fbc ? { fbc: input.fbc } : {}),
+    ...(input.fbclid ? { fbclid: input.fbclid } : {}),
     ...(input.clientIpAddress ? { clientIpAddress: input.clientIpAddress } : {}),
     ...(input.userAgent ? { clientUserAgent: input.userAgent } : {}),
 
@@ -87,7 +137,18 @@ function buildMetaString(input: {
 function pixUnavailableResponse(extra?: any) {
   if (!isProduction) {
     console.error("[pix] PIX indisponível agora:", extra)
+  } else {
+    // Em produção, loga só o essencial (sem vazar payload)
+    if (extra?.requestId) {
+      console.error("[pix] PIX indisponível:", {
+        requestId: extra.requestId,
+        stage: extra.stage,
+        orderId: extra.orderId,
+        provider: extra.provider,
+      })
+    }
   }
+
   return NextResponse.json(
     { ok: false, error: "PIX indisponível no momento. Tente novamente em instantes." },
     { status: 503 },
@@ -195,6 +256,7 @@ async function registerFailedTransaction(params: {
   requestId: string
   fbp?: string
   fbc?: string
+  fbclid?: string
   clientIpAddress?: string
   userAgent?: string
   baseOrderId?: string | null
@@ -208,6 +270,7 @@ async function registerFailedTransaction(params: {
     const meta = buildMetaString({
       fbp: params.fbp,
       fbc: params.fbc,
+      fbclid: params.fbclid,
       clientIpAddress: params.clientIpAddress,
       userAgent: params.userAgent,
       createdFrom: params.createdFrom,
@@ -254,16 +317,51 @@ export async function POST(req: Request) {
   try {
     const body = await req.json()
 
-    if (!isProduction) console.log("REQUEST /api/pagamento/pix BODY:", body)
-    else console.log("REQUEST /api/pagamento/pix RECEIVED", { requestId })
-
     const headers = req.headers
     const userAgent = headers.get("user-agent") || undefined
     const clientIpAddress = getClientIp(headers)
 
     const cookies = parseCookies(headers.get("cookie"))
-    const fbp = cookies["_fbp"] || undefined
-    const fbc = cookies["_fbc"] || undefined
+
+    // ✅ Prioridade de sinais (porque WebView/cookie pode falhar):
+    // 1) body (enviado pelo /pagamento/page.tsx)
+    // 2) cookie
+    // 3) deriva fbc do fbclid quando possível
+    const fbpFromBody = normalizeMetaId(body?.fbp)
+    const fbcFromBody = normalizeMetaId(body?.fbc)
+    const fbclidFromBody = normalizeMetaId(body?.fbclid)
+
+    const fbpFromCookie = normalizeMetaId(cookies["_fbp"])
+    const fbcFromCookie = normalizeMetaId(cookies["_fbc"])
+
+    const fbclid = fbclidFromBody
+    const fbp = fbpFromBody || fbpFromCookie || undefined
+
+    // se já veio fbc pelo body/cookie, usa; senão tenta derivar do fbclid
+    const derivedFbc = buildFbcFromFbclid(fbclid, Math.floor(Date.now() / 1000))
+    const fbc = fbcFromBody || fbcFromCookie || derivedFbc || undefined
+
+    const referer = headers.get("referer") || undefined
+    const origin = headers.get("origin") || undefined
+
+    const webview = isLikelyInstagramOrFbWebView(userAgent)
+
+    if (!isProduction) {
+      console.log("REQUEST /api/pagamento/pix BODY:", body)
+    } else {
+      console.log("[pix-request]", {
+        requestId,
+        webview,
+        hasFbp: Boolean(fbp),
+        hasFbc: Boolean(fbc),
+        hasFbclid: Boolean(fbclid),
+        ipHash: clientIpAddress ? sha256Short(clientIpAddress) : null,
+        origin: origin ? origin.slice(0, 140) : null,
+        referer: referer ? referer.slice(0, 180) : null,
+        ua: userAgent ? userAgent.slice(0, 180) : null,
+      })
+      console.log("REQUEST /api/pagamento/pix RECEIVED", { requestId })
+    }
 
     const isUpsell =
       body?.isUpsell === true ||
@@ -364,9 +462,12 @@ export async function POST(req: Request) {
     // -------------------------------------------------
     const customer = body?.customer || {}
     const documentNumber = normalizeDigits(customer?.documentNumber || "")
-    const phone = normalizeDigits(customer?.phone || "")
-    const email: string | null = customer?.email || null
+    const phone = normalizePhoneBR(customer?.phone || "")
     const fullName: string | null = customer?.name || null
+
+    // Evita email placeholder genérico (alguns gateways rejeitam / penalizam)
+    const emailFromBody: string | null = customer?.email || null
+    const email: string | null = emailFromBody || (documentNumber ? `${documentNumber}@noemail.local` : null)
 
     if (!documentNumber) {
       return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
@@ -376,7 +477,7 @@ export async function POST(req: Request) {
     // USER (CPF DOMINANTE)
     // -------------------------------------------------
     const orConditions: any[] = [{ cpf: documentNumber }]
-    if (email) orConditions.push({ email })
+    if (emailFromBody) orConditions.push({ email: emailFromBody })
 
     let user = await prisma.user.findFirst({ where: { OR: orConditions } })
 
@@ -388,7 +489,7 @@ export async function POST(req: Request) {
         user = await prisma.user.create({
           data: {
             cpf: documentNumber,
-            email,
+            email: emailFromBody || null,
             phone: phone || null,
             firstName,
             lastName,
@@ -416,6 +517,24 @@ export async function POST(req: Request) {
         amountInCents,
         effectiveQty,
         cpf: documentNumber ? "***" + documentNumber.slice(-4) : null,
+        hasFbp: Boolean(fbp),
+        hasFbc: Boolean(fbc),
+        hasFbclid: Boolean(fbclid),
+      })
+    } else {
+      console.log("[pix-incoming]", {
+        requestId,
+        createdFrom,
+        isUpsell,
+        amountInCents,
+        effectiveQty,
+        baseOrderId: baseOrderId || null,
+        providedOrderId: providedOrderId || null,
+        cpfLast4: documentNumber ? documentNumber.slice(-4) : null,
+        webview,
+        hasFbp: Boolean(fbp),
+        hasFbc: Boolean(fbc),
+        hasFbclid: Boolean(fbclid),
       })
     }
 
@@ -464,7 +583,7 @@ export async function POST(req: Request) {
             amount: amountInCents,
             customer: {
               name: fullName || "Cliente",
-              email: email || "cliente@example.com",
+              email: email || "noemail.local",
               phone,
               document: { type: "CPF", number: documentNumber },
             },
@@ -490,6 +609,7 @@ export async function POST(req: Request) {
           requestId,
           fbp,
           fbc,
+          fbclid,
           clientIpAddress,
           userAgent,
           baseOrderId: null,
@@ -499,6 +619,14 @@ export async function POST(req: Request) {
         })
 
         const c = classifyProviderError(e)
+        console.error("[pix-create-fail]", {
+          requestId,
+          orderId: existingOrder.id,
+          mode: "pay_existing_order",
+          provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+          message: c.rawMessage?.slice(0, 220),
+        })
+
         return pixUnavailableResponse({
           stage: "pay_existing_order_provider_error",
           requestId,
@@ -512,6 +640,17 @@ export async function POST(req: Request) {
       const expiresAt = (resp as any)?.expiresAt ?? null
       const raw = (resp as any)?.raw
 
+      const gatewayId = resolveGatewayId(resp)
+
+      console.log("[pix-create-ok]", {
+        requestId,
+        orderId: existingOrder.id,
+        mode: "pay_existing_order",
+        gatewayId: gatewayId || null,
+        hasCopiaECola: Boolean(pixCopiaECola),
+        webview,
+      })
+
       if (!pixCopiaECola) {
         await registerFailedTransaction({
           orderId: existingOrder.id,
@@ -520,6 +659,7 @@ export async function POST(req: Request) {
           requestId,
           fbp,
           fbc,
+          fbclid,
           clientIpAddress,
           userAgent,
           baseOrderId: null,
@@ -537,11 +677,10 @@ export async function POST(req: Request) {
         })
       }
 
-      const gatewayId = resolveGatewayId(resp)
-
       const meta = buildMetaString({
         fbp,
         fbc,
+        fbclid,
         clientIpAddress,
         userAgent,
         createdFrom: "main",
@@ -615,7 +754,7 @@ export async function POST(req: Request) {
           amount: amountInCents,
           customer: {
             name: fullName || "Cliente",
-            email: email || "cliente@example.com",
+            email: email || "noemail.local",
             phone,
             document: { type: "CPF", number: documentNumber },
           },
@@ -641,6 +780,7 @@ export async function POST(req: Request) {
         requestId,
         fbp,
         fbc,
+        fbclid,
         clientIpAddress,
         userAgent,
         baseOrderId: isUpsell ? baseOrderId : null,
@@ -650,6 +790,16 @@ export async function POST(req: Request) {
       })
 
       const c = classifyProviderError(e)
+      console.error("[pix-create-fail]", {
+        requestId,
+        orderId: order.id,
+        mode: "create_new",
+        isUpsell,
+        provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+        message: c.rawMessage?.slice(0, 220),
+        webview,
+      })
+
       return pixUnavailableResponse({
         stage: "create_new_provider_error",
         orderId: order.id,
@@ -663,6 +813,18 @@ export async function POST(req: Request) {
     const expiresAt = (resp as any)?.expiresAt ?? null
     const raw = (resp as any)?.raw
 
+    const gatewayId = resolveGatewayId(resp)
+
+    console.log("[pix-create-ok]", {
+      requestId,
+      orderId: order.id,
+      mode: "create_new",
+      isUpsell,
+      gatewayId: gatewayId || null,
+      hasCopiaECola: Boolean(pixCopiaECola),
+      webview,
+    })
+
     if (!pixCopiaECola) {
       await registerFailedTransaction({
         orderId: order.id,
@@ -671,6 +833,7 @@ export async function POST(req: Request) {
         requestId,
         fbp,
         fbc,
+        fbclid,
         clientIpAddress,
         userAgent,
         baseOrderId: isUpsell ? baseOrderId : null,
@@ -690,11 +853,10 @@ export async function POST(req: Request) {
       })
     }
 
-    const gatewayId = resolveGatewayId(resp)
-
     const meta = buildMetaString({
       fbp,
       fbc,
+      fbclid,
       clientIpAddress,
       userAgent,
       createdFrom,

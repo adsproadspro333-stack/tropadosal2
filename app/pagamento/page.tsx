@@ -63,6 +63,11 @@ type PendingPixCache = {
   cacheKey?: string
   cpf?: string | null
   mode?: "main" | "upsell"
+
+  // ✅ sinais de atribuição (para CAPI via backend)
+  fbp?: string | null
+  fbc?: string | null
+  fbclid?: string | null
 }
 
 type UpsellCache = {
@@ -167,6 +172,37 @@ function resolveTxDbId(data: any): string | null {
 }
 
 // ===============================
+// ✅ META CLICK IDs (fbclid / fbc / fbp)
+// ===============================
+function getCookieValue(name: string) {
+  if (typeof document === "undefined") return ""
+  const cookie = document.cookie || ""
+  const parts = cookie.split(";").map((p) => p.trim())
+  const found = parts.find((p) => p.startsWith(`${name}=`))
+  if (!found) return ""
+  return decodeURIComponent(found.slice(name.length + 1) || "")
+}
+
+function buildFbcFromFbclid(fbclid?: string, eventTimeSec?: number) {
+  const c = String(fbclid || "").trim()
+  if (!c) return ""
+  const ts = Number(eventTimeSec || Math.floor(Date.now() / 1000))
+  if (!Number.isFinite(ts)) return ""
+  return `fb.1.${ts}.${c}`
+}
+
+function persistFbcCookieIfMissing(fbc: string) {
+  if (typeof document === "undefined") return
+  if (!fbc) return
+  const existing = getCookieValue("_fbc")
+  if (existing) return
+
+  // 90 dias (padrão comum), SameSite=Lax
+  const maxAge = 90 * 24 * 60 * 60
+  document.cookie = `_fbc=${encodeURIComponent(fbc)}; path=/; max-age=${maxAge}; samesite=lax`
+}
+
+// ===============================
 
 export default function PagamentoPage() {
   const router = useRouter()
@@ -226,6 +262,38 @@ export default function PagamentoPage() {
   useEffect(() => {
     setUpsellReady(!isUpsell)
   }, [isUpsell])
+
+  // ✅ Captura fbclid/fbp/fbc no browser (para salvar no meta do PIX via backend)
+  const clickIds = useMemo(() => {
+    if (typeof window === "undefined") return { fbclid: "", fbp: "", fbc: "" }
+
+    // fbclid pode vir em qualquer página do funil; guardamos para não perder no /pagamento
+    const fbclidFromQs = (searchParams.get("fbclid") || "").trim()
+    const storedFbclid = (window.localStorage.getItem("lastFbclid") || "").trim()
+    const fbclid = fbclidFromQs || storedFbclid
+
+    if (fbclidFromQs) {
+      window.localStorage.setItem("lastFbclid", fbclidFromQs)
+    }
+
+    const fbp = getCookieValue("_fbp")
+    let fbc = getCookieValue("_fbc")
+
+    // se não tem _fbc mas tem fbclid, gera e seta cookie (ajuda Pixel e ajuda CAPI via backend)
+    if (!fbc && fbclid) {
+      fbc = buildFbcFromFbclid(fbclid, Math.floor(Date.now() / 1000))
+      persistFbcCookieIfMissing(fbc)
+    }
+
+    // salva também em LS (debug / estabilidade)
+    try {
+      if (fbp) window.localStorage.setItem("lastFbp", fbp)
+      if (fbc) window.localStorage.setItem("lastFbc", fbc)
+    } catch {}
+
+    return { fbclid, fbp, fbc }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
   // ✅ Upsell resolve (prioridade: query > localStorage)
   const upsell = useMemo(() => {
@@ -465,6 +533,11 @@ export default function PagamentoPage() {
             // opcional
             baseOrderId,
 
+            // ✅ NOVO: IDs de clique/sinais do browser (para gravar no meta do PIX no backend)
+            fbclid: clickIds.fbclid || null,
+            fbp: clickIds.fbp || null,
+            fbc: clickIds.fbc || null,
+
             customer: {
               name: customer.nome,
               email: customer.email,
@@ -556,6 +629,11 @@ export default function PagamentoPage() {
             cacheKey: currentKey,
             cpf: cpfNow || null,
             mode: intended.mode,
+
+            // ✅ salva sinais junto (debug/robustez)
+            fbp: clickIds.fbp || null,
+            fbc: clickIds.fbc || null,
+            fbclid: clickIds.fbclid || null,
           }
           localStorage.setItem(LS_PENDING_KEY, JSON.stringify(cache))
         }
@@ -591,7 +669,7 @@ export default function PagamentoPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router, intended.qty, intended.amount, intended.mode, orderIdFromUrl, pixPayload, transactionId, upsell, isUpsell, upsellReady])
+  }, [router, intended.qty, intended.amount, intended.mode, orderIdFromUrl, pixPayload, transactionId, upsell, isUpsell, upsellReady, clickIds.fbclid, clickIds.fbp, clickIds.fbc])
 
   // helper: checa pagamento
   const checkPaymentStatusOnce = async () => {

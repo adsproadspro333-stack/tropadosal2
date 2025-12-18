@@ -12,7 +12,7 @@ const FB_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID
 const FB_CAPI_TOKEN = process.env.FACEBOOK_CAPI_TOKEN
 const FB_TEST_EVENT_CODE = process.env.FB_TEST_EVENT_CODE
 
-const SITE_URL = process.env.SITE_URL || "https://favelapremios.plataformapremios.site"
+const SITE_URL = (process.env.SITE_URL || "https://favelapremios.plataformapremios.site").replace(/\/+$/, "")
 const PUSHCUT_ORDER_PAID_URL = process.env.PUSHCUT_ORDER_PAID_URL
 
 // 🔒 IMPORTANTÍSSIMO: webhook NUNCA deve devolver 500 pro gateway.
@@ -37,17 +37,6 @@ function normalizePhone(phone: string) {
 
 function normalizeCpf(cpf: string) {
   return String(cpf || "").replace(/\D/g, "")
-}
-
-function parseCookies(cookieHeader: string | null) {
-  const out: Record<string, string> = {}
-  if (!cookieHeader) return out
-  cookieHeader.split(";").forEach((part) => {
-    const [k, ...v] = part.trim().split("=")
-    if (!k) return
-    out[k] = decodeURIComponent(v.join("=") || "")
-  })
-  return out
 }
 
 function safeJsonParse(input: any) {
@@ -200,19 +189,27 @@ export async function POST(req: Request) {
       return SAFE_OK()
     }
 
-    if (!isPaidStatus(tx)) {
-      const st =
-        tx?.statusTransaction ??
-        tx?.status_transaction ??
-        tx?.status ??
-        tx?.transactionStatus ??
-        null
-      console.log("MW WEBHOOK: status ignorado:", st)
-      return SAFE_OK()
-    }
-
     const gatewayId = extractGatewayId(tx, json)
     const orderIdFromCode = extractOrderIdFromTx(tx)
+    const statusRaw =
+      tx?.statusTransaction ??
+      tx?.status_transaction ??
+      tx?.status ??
+      tx?.transactionStatus ??
+      null
+
+    if (IS_PRODUCTION) {
+      console.log("MW WEBHOOK (prod) parsed:", {
+        gatewayId: gatewayId || null,
+        orderIdFromCode: orderIdFromCode || null,
+        status: statusRaw ? String(statusRaw).slice(0, 80) : null,
+      })
+    }
+
+    if (!isPaidStatus(tx)) {
+      console.log("MW WEBHOOK: status ignorado:", statusRaw)
+      return SAFE_OK()
+    }
 
     if (!gatewayId && !orderIdFromCode) {
       console.error("MW WEBHOOK: sem idTransaction/txid e sem code:", tx)
@@ -305,28 +302,28 @@ export async function POST(req: Request) {
           gatewayId: gatewayId || null,
         })
 
-        // confirma pra gateway imediatamente
         const ack = SAFE_OK()
 
         // pós-ack: pushcut/capi (sem bloquear)
         if (PUSHCUT_ORDER_PAID_URL) {
-          queueMicrotask(async () => {
-            try {
-              await sendPushcutNotification(PUSHCUT_ORDER_PAID_URL, {
-                type: "order_paid",
-                orderId: result.orderId,
-                transactionId: result.createdTx.id,
-                amount: valueToUse,
-                paidAt: nowIso,
-              })
-            } catch (err) {
-              console.error("Erro ao enviar Pushcut de pedido pago (early-fix):", err)
-            }
-          })
+          setTimeout(() => {
+            ;(async () => {
+              try {
+                await sendPushcutNotification(PUSHCUT_ORDER_PAID_URL, {
+                  type: "order_paid",
+                  orderId: result.orderId,
+                  transactionId: result.createdTx.id,
+                  amount: valueToUse,
+                  paidAt: nowIso,
+                })
+              } catch (err) {
+                console.error("Erro ao enviar Pushcut de pedido pago (early-fix):", err)
+              }
+            })()
+          }, 0)
         }
 
-        // Meta CAPI vai rodar no fluxo normal abaixo apenas se carregarmos orderWithUser,
-        // então aqui a gente encerra já com ack e deixa pra próxima melhoria se quiser.
+        // Meta CAPI: mantemos o fluxo normal abaixo (onde temos orderWithUser/meta)
         return ack
       } catch (e) {
         console.error("MW WEBHOOK: falha no early-fix (não bloqueando gateway):", e)
@@ -421,144 +418,147 @@ export async function POST(req: Request) {
 
     // PUSHCUT (não bloqueia)
     if (PUSHCUT_ORDER_PAID_URL && shouldUpdatePaid) {
-      queueMicrotask(async () => {
-        try {
-          await sendPushcutNotification(PUSHCUT_ORDER_PAID_URL, {
-            type: "order_paid",
-            orderId: updatedOrderId,
-            transactionId: updatedTransaction.id,
-            amount: (updatedTransaction as any).value ?? (orderWithUser as any)?.amount ?? null,
-            paidAt: nowIso,
-          })
-        } catch (err) {
-          console.error("Erro ao enviar Pushcut de pedido pago:", err)
-        }
-      })
+      setTimeout(() => {
+        ;(async () => {
+          try {
+            await sendPushcutNotification(PUSHCUT_ORDER_PAID_URL, {
+              type: "order_paid",
+              orderId: updatedOrderId,
+              transactionId: updatedTransaction.id,
+              amount: (updatedTransaction as any).value ?? (orderWithUser as any)?.amount ?? null,
+              paidAt: nowIso,
+            })
+          } catch (err) {
+            console.error("Erro ao enviar Pushcut de pedido pago:", err)
+          }
+        })()
+      }, 0)
     }
 
     // META CAPI PURCHASE (não bloqueia)
     if (FB_PIXEL_ID && FB_CAPI_TOKEN && orderWithUser) {
-      queueMicrotask(async () => {
-        try {
-          const txForSignals =
-            orderWithUser.transactions?.find((t) => t.id === updatedTransaction.id) ||
-            orderWithUser.transactions?.[0] ||
-            updatedTransaction
+      setTimeout(() => {
+        ;(async () => {
+          try {
+            const txForSignals =
+              orderWithUser.transactions?.find((t) => t.id === updatedTransaction.id) ||
+              orderWithUser.transactions?.[0] ||
+              updatedTransaction
 
-          const metaObj = safeJsonParse((txForSignals as any).meta) || {}
+            const metaObj = safeJsonParse((txForSignals as any).meta) || {}
 
-          // dedupe
-          if (metaObj?.purchaseSentAt) {
-            console.log("META CAPI: Purchase já enviado antes, pulando:", {
-              orderId: updatedOrderId,
-              transactionId: updatedTransaction.id,
-            })
-            return
-          }
+            // dedupe
+            if (metaObj?.purchaseSentAt) {
+              console.log("META CAPI: Purchase já enviado antes, pulando:", {
+                orderId: updatedOrderId,
+                transactionId: updatedTransaction.id,
+              })
+              return
+            }
 
-          const eventTime = getEventTimeFromTx(tx)
+            const eventTime = getEventTimeFromTx(tx)
 
-          const valueNumber =
-            Number((updatedTransaction as any).value) ||
-            Number((orderWithUser as any)?.amount) ||
-            0
+            const valueNumber =
+              Number((updatedTransaction as any).value) ||
+              Number((orderWithUser as any)?.amount) ||
+              0
 
-          const userData: any = {}
-          const dbUser = orderWithUser.user
+            const userData: any = {}
+            const dbUser = orderWithUser.user
 
-          if (dbUser?.email) userData.em = [sha256(normalizeEmail(dbUser.email))]
-          if (dbUser?.phone) {
-            const ph = normalizePhone(dbUser.phone)
-            if (ph) userData.ph = [sha256(ph)]
-          }
-          if (dbUser?.cpf) {
-            const cpf = normalizeCpf(dbUser.cpf)
-            if (cpf) userData.external_id = [sha256(cpf)]
-          }
+            if (dbUser?.email) userData.em = [sha256(normalizeEmail(dbUser.email))]
+            if (dbUser?.phone) {
+              const ph = normalizePhone(dbUser.phone)
+              if (ph) userData.ph = [sha256(ph)]
+            }
+            if (dbUser?.cpf) {
+              const cpf = normalizeCpf(dbUser.cpf)
+              if (cpf) userData.external_id = [sha256(cpf)]
+            }
 
-          // sinais do browser (salvos quando gerou o pix)
-          const uaFromMeta = metaObj?.clientUserAgent || metaObj?.client_user_agent
-          const ipFromMeta = metaObj?.clientIpAddress || metaObj?.client_ip_address
-          const fbpFromMeta = metaObj?.fbp
-          const fbcFromMeta = metaObj?.fbc
-          const fbclidFromMeta = metaObj?.fbclid
+            // ✅ Sinais do browser (salvos quando gerou o pix) — fonte primária
+            const uaFromMeta = metaObj?.clientUserAgent || metaObj?.client_user_agent
+            const ipFromMeta = metaObj?.clientIpAddress || metaObj?.client_ip_address
+            const fbpFromMeta = metaObj?.fbp
+            const fbcFromMeta = metaObj?.fbc
+            const fbclidFromMeta = metaObj?.fbclid
 
-          if (uaFromMeta) userData.client_user_agent = uaFromMeta
-          if (ipFromMeta) userData.client_ip_address = ipFromMeta
+            if (uaFromMeta) userData.client_user_agent = uaFromMeta
+            if (ipFromMeta) userData.client_ip_address = ipFromMeta
 
-          const cookies = parseCookies(req.headers.get("cookie"))
-          const fbp = fbpFromMeta || cookies["_fbp"]
-          const fbc = fbcFromMeta || cookies["_fbc"] || buildFbcFromFbclid(fbclidFromMeta, eventTime)
+            // ✅ NÃO tenta cookies do webhook (não existe). Usa meta do PIX.
+            const fbp = fbpFromMeta
+            const fbc = fbcFromMeta || buildFbcFromFbclid(fbclidFromMeta, eventTime)
 
-          if (fbp) userData.fbp = fbp
-          if (fbc) userData.fbc = fbc
+            if (fbp) userData.fbp = fbp
+            if (fbc) userData.fbc = fbc
 
-          const eventIdFromOrder = (orderWithUser as any).metaEventId || updatedTransaction.id
+            const eventIdFromOrder = (orderWithUser as any).metaEventId || updatedTransaction.id
 
-          const capiBody: any = {
-            data: [
-              {
-                event_name: "Purchase",
-                event_time: eventTime,
-                action_source: "website",
-                event_id: String(eventIdFromOrder),
-                event_source_url: `${SITE_URL}/pagamento-confirmado?orderId=${updatedOrderId}`,
-                custom_data: {
-                  currency: "BRL",
-                  value: valueNumber,
-                  order_id: updatedOrderId,
-                  contents: [
-                    {
-                      id: String(updatedOrderId),
-                      quantity: (orderWithUser as any).quantity ?? 1,
-                      item_price: valueNumber,
-                    },
-                  ],
-                  content_type: "product",
+            const capiBody: any = {
+              data: [
+                {
+                  event_name: "Purchase",
+                  event_time: eventTime,
+                  action_source: "website",
+                  event_id: String(eventIdFromOrder),
+                  event_source_url: `${SITE_URL}/pagamento-confirmado?orderId=${updatedOrderId}`,
+                  custom_data: {
+                    currency: "BRL",
+                    value: valueNumber,
+                    order_id: updatedOrderId,
+                    contents: [
+                      {
+                        id: String(updatedOrderId),
+                        quantity: (orderWithUser as any).quantity ?? 1,
+                        item_price: valueNumber,
+                      },
+                    ],
+                    content_type: "product",
+                  },
+                  user_data: userData,
                 },
-                user_data: userData,
-              },
-            ],
+              ],
+            }
+
+            if (FB_TEST_EVENT_CODE) capiBody.test_event_code = FB_TEST_EVENT_CODE
+
+            const capiUrl = `https://graph.facebook.com/v21.0/${FB_PIXEL_ID}/events?access_token=${FB_CAPI_TOKEN}`
+
+            const prevAttempts = Number(metaObj?.purchaseAttemptCount || 0) || 0
+            const attemptNow = prevAttempts + 1
+            const nowIso2 = new Date().toISOString()
+
+            const capiRes = await fetch(capiUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(capiBody),
+            })
+
+            const capiText = await capiRes.text()
+            console.log("META CAPI RESPONSE (Purchase):", capiRes.status, capiText)
+
+            const mergedMetaBase = {
+              ...(metaObj || {}),
+              purchaseLastAttemptAt: nowIso2,
+              purchaseAttemptCount: attemptNow,
+              capiEventId: String(eventIdFromOrder),
+              capiStatus: capiRes.status,
+              capiResponse: String(capiText || "").slice(0, 2000),
+              purchaseLastError: capiRes.ok ? null : `CAPI_NOT_OK_${capiRes.status}`,
+            }
+
+            const mergedMeta = capiRes.ok ? { ...mergedMetaBase, purchaseSentAt: nowIso2 } : mergedMetaBase
+
+            await prisma.transaction.update({
+              where: { id: updatedTransaction.id },
+              data: { meta: stringifyMeta(mergedMeta) },
+            })
+          } catch (err: any) {
+            console.error("Erro ao enviar Purchase para Meta:", err)
           }
-
-          if (FB_TEST_EVENT_CODE) capiBody.test_event_code = FB_TEST_EVENT_CODE
-
-          // OBS: mantém tua versão — se quiser, depois ajustamos pra versão atual
-          const capiUrl = `https://graph.facebook.com/v21.0/${FB_PIXEL_ID}/events?access_token=${FB_CAPI_TOKEN}`
-
-          const prevAttempts = Number(metaObj?.purchaseAttemptCount || 0) || 0
-          const attemptNow = prevAttempts + 1
-          const nowIso2 = new Date().toISOString()
-
-          const capiRes = await fetch(capiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(capiBody),
-          })
-
-          const capiText = await capiRes.text()
-          console.log("META CAPI RESPONSE (Purchase):", capiRes.status, capiText)
-
-          const mergedMetaBase = {
-            ...(metaObj || {}),
-            purchaseLastAttemptAt: nowIso2,
-            purchaseAttemptCount: attemptNow,
-            capiEventId: String(eventIdFromOrder),
-            capiStatus: capiRes.status,
-            capiResponse: String(capiText || "").slice(0, 2000),
-            purchaseLastError: capiRes.ok ? null : `CAPI_NOT_OK_${capiRes.status}`,
-          }
-
-          const mergedMeta = capiRes.ok ? { ...mergedMetaBase, purchaseSentAt: nowIso2 } : mergedMetaBase
-
-          await prisma.transaction.update({
-            where: { id: updatedTransaction.id },
-            data: { meta: stringifyMeta(mergedMeta) },
-          })
-        } catch (err: any) {
-          console.error("Erro ao enviar Purchase para Meta:", err)
-        }
-      })
+        })()
+      }, 0)
     }
 
     return ack

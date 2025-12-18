@@ -23,6 +23,12 @@ type CreatePixParams = {
   expiresInDays: number
   traceable?: boolean
   postbackUrl?: string
+
+  // ✅ opcional (não quebra quem já chama)
+  debug?: {
+    requestId?: string
+    orderId?: string
+  }
 }
 
 function mask(value: string, keepStart = 6, keepEnd = 4) {
@@ -83,7 +89,8 @@ function deepFindPixBrCode(obj: any): string | null {
   const looksLikePix = (v: string) => {
     const s = String(v || "").trim()
     if (!s) return false
-    if (s.length < 40) return false
+    if (s.length < 60) return false
+    // BR Code geralmente começa com 000201
     return s.includes("000201")
   }
 
@@ -141,6 +148,12 @@ function getEnv() {
 
   const TIMEOUT_MS = Number(process.env.MWBANK_TIMEOUT_MS || 12000)
 
+  // logs
+  const LOG_LEVEL = String(process.env.MWBANK_LOG_LEVEL || "off").toLowerCase() as
+    | "off"
+    | "info"
+    | "debug"
+
   return {
     BASE_URL,
     CLIENT_ID,
@@ -148,6 +161,7 @@ function getEnv() {
     CERT_CLIENT_BASE64,
     DEFAULT_WEBHOOK_URL,
     TIMEOUT_MS,
+    LOG_LEVEL,
   }
 }
 
@@ -193,7 +207,34 @@ function payloadMessage(data: any) {
 function isUnauthorizedPayload(data: any) {
   const msg = payloadMessage(data).toLowerCase()
   // MW veio com "Unathorized" (typo) no seu log:
-  return msg.includes("unauthor") || msg.includes("unathor") || msg.includes("forbidden") || msg.includes("invalid token")
+  return (
+    msg.includes("unauthor") ||
+    msg.includes("unathor") ||
+    msg.includes("forbidden") ||
+    msg.includes("invalid token")
+  )
+}
+
+function safePreview(data: any) {
+  try {
+    if (!data) return null
+    // remove campos óbvios de segredo, se existirem
+    const clone = JSON.parse(JSON.stringify(data))
+    if (clone?.access_token) clone.access_token = "***"
+    if (clone?.token) clone.token = "***"
+    if (clone?.data?.access_token) clone.data.access_token = "***"
+    if (clone?.data?.token) clone.data.token = "***"
+    return clone
+  } catch {
+    return null
+  }
+}
+
+function sanitizeEmail(email?: string) {
+  const e = String(email || "").trim()
+  if (!e) return ""
+  // tira espaços e caracteres estranhos
+  return e.replace(/\s+/g, "")
 }
 
 async function getAccessToken() {
@@ -202,7 +243,7 @@ async function getAccessToken() {
   if (inFlightTokenPromise) return inFlightTokenPromise
 
   inFlightTokenPromise = (async () => {
-    const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS } = getEnv()
+    const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS, LOG_LEVEL } = getEnv()
     if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
     if (!CERT_CLIENT_BASE64) throw new Error("MWBANK_CERT_CLIENT inválido/ausente (base64 em 1 linha)")
 
@@ -263,13 +304,22 @@ async function getAccessToken() {
           token: String(token),
           expiresAt: Date.now() + Math.max(60, expiresInSec) * 1000,
         }
+
+        if (LOG_LEVEL === "debug") {
+          console.log("[mwbank-auth-ok]", {
+            httpStatus: last?.res?.status,
+            client_id: mask(CLIENT_ID),
+            expiresInSec,
+          })
+        }
+
         return cachedToken.token
       }
     }
 
     console.error("MWBANK AUTH ERROR:", {
       httpStatus: last?.res?.status,
-      payloadPreview: last?.data,
+      payloadPreview: safePreview(last?.data),
       client_id: mask(getEnv().CLIENT_ID),
     })
 
@@ -287,10 +337,13 @@ async function getAccessToken() {
    🎯 CREATE PIX
 ---------------------------------------------------- */
 export async function createPixTransaction(params: CreatePixParams) {
-  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS } = getEnv()
+  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS, LOG_LEVEL } = getEnv()
 
   if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
   if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
+
+  const requestId = params?.debug?.requestId
+  const orderId = params?.debug?.orderId
 
   let accessToken = await getAccessToken()
   const url = `${BASE_URL}/pix`
@@ -303,10 +356,12 @@ export async function createPixTransaction(params: CreatePixParams) {
     throw new Error("Webhook inválido (precisa https)")
   }
 
+  const email = sanitizeEmail(params.customer.email)
+
   const body = {
     code: externalRef,
     amount: amountBRL,
-    email: params.customer.email,
+    email,
     document: String(params.customer.document.number || "").replace(/\D/g, ""),
     url: postbackUrl,
   }
@@ -333,6 +388,19 @@ export async function createPixTransaction(params: CreatePixParams) {
       },
       TIMEOUT_MS,
     )
+  }
+
+  if (LOG_LEVEL === "debug") {
+    console.log("[mwbank-pix-request]", {
+      requestId: requestId || null,
+      orderId: orderId || null,
+      url,
+      code: externalRef,
+      amount: amountBRL,
+      has_client_secret: !!CLIENT_SECRET,
+      has_cert_client: !!CERT_CLIENT_BASE64,
+      postbackUrl: postbackUrl.slice(0, 140),
+    })
   }
 
   // ✅ retry inteligente:
@@ -367,33 +435,41 @@ export async function createPixTransaction(params: CreatePixParams) {
     }
 
     // se não for unauthorized e ok, para
-    if (created?.res?.ok && !created?.data?.error) break
+    if (created?.res?.ok && !created?.data?.error && !isUnauthorizedPayload(created?.data)) break
   }
 
   // Se depois de retries ainda estiver "unauthorized" (mesmo 200), mata aqui com erro explícito
   if (isUnauthorizedPayload(created?.data)) {
+    const msg = payloadMessage(created?.data)
     console.error("MWBANK PIX UNAUTHORIZED (mesmo HTTP ok):", {
+      requestId: requestId || null,
+      orderId: orderId || null,
       httpStatus: created?.res?.status,
-      payload: created?.data,
+      payloadPreview: safePreview(created?.data),
       rawPreview: created?.text?.slice(0, 1200),
       client_id: mask(CLIENT_ID),
+      message: msg?.slice(0, 220),
     })
-    throw new Error("MWBANK_UNAUTHORIZED")
+    throw new Error(`MWBANK_UNAUTHORIZED:${msg || "unauthorized"}`)
   }
 
   if (!created?.res?.ok || created?.data?.error) {
+    const msg = payloadMessage(created?.data)
     console.error("MWBANK CREATE PIX ERROR:", {
+      requestId: requestId || null,
+      orderId: orderId || null,
       status: created?.res?.status,
-      payload: created?.data,
+      payloadPreview: safePreview(created?.data),
       body: created?.text?.slice(0, 1200),
       code: externalRef,
       amount: amountBRL,
       client_id: mask(CLIENT_ID),
       has_client_secret: !!CLIENT_SECRET,
       has_cert_client: !!CERT_CLIENT_BASE64,
-      lastUnauthorizedPayload,
+      lastUnauthorizedPayload: safePreview(lastUnauthorizedPayload),
+      message: msg?.slice(0, 260),
     })
-    throw new Error("Falha ao gerar PIX (MWBANK)")
+    throw new Error(`Falha ao gerar PIX (MWBANK): ${msg || "unknown"}`)
   }
 
   // 🔥 PARSER BLINDADO
@@ -426,12 +502,26 @@ export async function createPixTransaction(params: CreatePixParams) {
     raw?.transactionId ||
     null
 
+  const pixStr = pixCopiaECola ? String(pixCopiaECola).trim() : null
+  const txidStr = txid ? String(txid).trim() : null
+
+  if (LOG_LEVEL === "info" || LOG_LEVEL === "debug") {
+    console.log("[mwbank-pix-ok]", {
+      requestId: requestId || null,
+      orderId: orderId || null,
+      httpStatus: created?.res?.status,
+      transactionId: txidStr,
+      hasCopiaECola: Boolean(pixStr),
+      status: d?.status || raw?.status || null,
+    })
+  }
+
   return {
     raw,
-    transactionId: txid ? String(txid).trim() : null,
+    transactionId: txidStr,
     amount: amountBRL,
     status: d?.status || raw?.status || null,
-    pixCopiaECola: pixCopiaECola ? String(pixCopiaECola).trim() : null,
+    pixCopiaECola: pixStr,
     qrCodeBase64: null,
     expiresAt: null,
   }
