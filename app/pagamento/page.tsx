@@ -45,7 +45,16 @@ const LS_UPSELL_KEY = "checkout_upsell_payload_v1"
 const UPSELL_TTL_MS = 10 * 60 * 1000
 
 type PendingPixCache = {
+  // ✅ no main: orderId = order (pending) criado
+  // ✅ no upsell: orderId = baseOrderId (pedido pago) — para bater com a URL e evitar “mix”
   orderId: string | null
+
+  // ✅ ajuda a evitar bug de comparação no upsell
+  baseOrderId?: string | null
+
+  // (opcional) id do pedido upsell criado no backend
+  upsellOrderId?: string | null
+
   transactionId: string | null // ✅ ID DO DB (prisma.transaction.id)
   pixPayload: string
   amount: number // em reais
@@ -61,6 +70,8 @@ type UpsellCache = {
   priceCents: number
   createdAt: number
   baseOrderId?: string | null
+  optId?: string | null
+  nonce?: string | null
 }
 
 function safeJsonParse<T>(value: string | null): T | null {
@@ -116,6 +127,8 @@ function readUpsellCache(): UpsellCache | null {
     priceCents,
     createdAt: Number(p.createdAt),
     baseOrderId: (p.baseOrderId || null) as any,
+    optId: (p.optId || null) as any,
+    nonce: (p.nonce || null) as any,
   }
 }
 
@@ -134,13 +147,41 @@ function buildPixCacheKey(input: {
   return `mode:${mode}|cpf:${cpf}|amt:${amountInCents}|qty:${qty}|order:${order}`
 }
 
+function resolveCopiaECola(data: any): string | null {
+  const v =
+    data?.pixCopiaECola ??
+    data?.copia_e_cola ??
+    data?.pix?.copiaECola ??
+    data?.pix?.copia_e_cola ??
+    data?.qr_code ??
+    null
+
+  const s = String(v || "").trim()
+  return s || null
+}
+
+function resolveTxDbId(data: any): string | null {
+  const v = data?.transactionId ?? data?.transaction?.id ?? null
+  const s = String(v || "").trim()
+  return s || null
+}
+
 // ===============================
 
 export default function PagamentoPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
+
   const orderIdFromUrl = searchParams.get("orderId")
   const isUpsell = searchParams.get("upsell") === "1"
+
+  // ✅ NEW: se vier por querystring (do pagamento-confirmado), é a fonte #1
+  const qsQtyRaw = searchParams.get("qty")
+  const qsPriceCentsRaw = searchParams.get("priceCents")
+
+  const qsQty = qsQtyRaw ? Math.round(Number(qsQtyRaw)) : 0
+  const qsPriceCents = qsPriceCentsRaw ? Math.round(Number(qsPriceCentsRaw)) : 0
+  const hasValidQsUpsell = isUpsell && qsQty > 0 && qsPriceCents > 0
 
   const { qty, totalInCents } = useCartStore()
 
@@ -169,11 +210,58 @@ export default function PagamentoPage() {
 
   const unitPrice = UNIT_PRICE_CENTS / 100
 
+  // ✅ FIX CRÍTICO: evita “gerar PIX no gateway mas não mudar tela” por corrida de effects no upsell
+  const [upsellReady, setUpsellReady] = useState(!isUpsell)
+
+  // ✅ reset seguro (libera nova geração sem “travar” por cacheKey)
+  const hardResetPixGeneration = () => {
+    clearPendingPixCache()
+    lastRequestKeyRef.current = null
+    paidRedirectedRef.current = false
+    setPixPayload("")
+    setTransactionId(null)
+  }
+
+  // se mudar o modo (raro, mas garante estado correto)
+  useEffect(() => {
+    setUpsellReady(!isUpsell)
+  }, [isUpsell])
+
+  // ✅ Upsell resolve (prioridade: query > localStorage)
   const upsell = useMemo(() => {
     if (!isUpsell) return null
+
+    // Se veio por query, garantimos que o /pagamento usa exatamente isso
+    if (hasValidQsUpsell) {
+      // sincroniza no LS (opcional) pra compatibilidade com seu fluxo atual
+      try {
+        const ls = readUpsellCache()
+        const baseOrderId = (ls?.baseOrderId || orderIdFromUrl || null) as any
+
+        const payload: UpsellCache = {
+          qty: qsQty,
+          priceCents: qsPriceCents,
+          createdAt: Date.now(),
+          baseOrderId,
+          optId: ls?.optId || null,
+          nonce: ls?.nonce || null,
+        }
+        localStorage.setItem(LS_UPSELL_KEY, JSON.stringify(payload))
+      } catch {}
+
+      return {
+        qty: qsQty,
+        priceCents: qsPriceCents,
+        createdAt: Date.now(),
+        baseOrderId: (orderIdFromUrl || null) as any,
+        optId: null,
+        nonce: null,
+      } as UpsellCache
+    }
+
     return readUpsellCache()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isUpsell, orderIdFromUrl])
+  }, [isUpsell, hasValidQsUpsell, qsQty, qsPriceCents, orderIdFromUrl])
 
   const intended = useMemo(() => {
     if (isUpsell && upsell) {
@@ -194,7 +282,7 @@ export default function PagamentoPage() {
   useEffect(() => {
     if (!isUpsell) return
 
-    const p = readUpsellCache()
+    const p = upsell // já resolvido (query ou LS)
     if (!p) {
       setError("Upsell expirou ou não foi encontrado. Volte e selecione a oferta novamente.")
       setLoading(false)
@@ -203,13 +291,15 @@ export default function PagamentoPage() {
 
     setResolved({ amount: p.priceCents / 100, qty: p.qty })
 
-    // limpa visual (mas não “libera” request duplicado: trava é por cacheKey)
     setPixPayload("")
     setTransactionId(null)
     setError(null)
     setLoading(true)
+
+    // 🔐 marca que o upsell está consistente (só agora pode gerar pix)
+    setUpsellReady(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isUpsell])
+  }, [isUpsell, upsell?.qty, upsell?.priceCents])
 
   // 1) Reuso seguro do cache (CPF+valor+qty+mode+order)
   useEffect(() => {
@@ -236,8 +326,17 @@ export default function PagamentoPage() {
       return
     }
 
-    if (orderIdFromUrl && pending?.orderId && orderIdFromUrl !== pending.orderId) {
-      return
+    // ✅ BUG FIX: no upsell, a URL traz baseOrderId.
+    // então comparamos com pending.baseOrderId (ou orderId quando salvamos assim).
+    if (orderIdFromUrl) {
+      const pendingOrderForCompare =
+        intended.mode === "upsell"
+          ? (pending.baseOrderId || pending.orderId || null)
+          : (pending.orderId || null)
+
+      if (pendingOrderForCompare && orderIdFromUrl !== pendingOrderForCompare) {
+        return
+      }
     }
 
     if (pending.cacheKey !== currentKey) {
@@ -253,8 +352,13 @@ export default function PagamentoPage() {
       setResolved({ amount: pending.amount, qty: pending.qty })
       setPixPayload(pending.pixPayload)
       setTransactionId(pending.transactionId) // ✅ DB id
+
+      // no main, orderId é o order pendente; no upsell, orderId é baseOrderId
       setOrderId(pending.orderId || orderIdFromUrl || null)
       setLoading(false)
+
+      // se recuperou cache de upsell, já pode considerar pronto
+      if (pending.mode === "upsell") setUpsellReady(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderIdFromUrl, intended.amount, intended.qty, intended.mode])
@@ -287,6 +391,9 @@ export default function PagamentoPage() {
 
   // 3) Geração do PIX
   useEffect(() => {
+    // 🔒 FIX: upsell só pode gerar pix quando estiver 100% resolvido
+    if (isUpsell && !upsellReady) return
+
     if (pixPayload && transactionId) {
       setLoading(false)
       return
@@ -313,7 +420,6 @@ export default function PagamentoPage() {
       mode: intended.mode,
     })
 
-    // ✅ trava absoluta: mesma intenção/cacheKey = não faz 2 requests nunca
     if (lastRequestKeyRef.current === currentKey) return
     lastRequestKeyRef.current = currentKey
 
@@ -326,6 +432,8 @@ export default function PagamentoPage() {
         setTransactionId(pending!.transactionId) // ✅ DB id
         setOrderId(pending!.orderId || orderIdFromUrl || null)
         setLoading(false)
+
+        if (pending?.mode === "upsell") setUpsellReady(true)
         return
       }
     }
@@ -354,7 +462,7 @@ export default function PagamentoPage() {
             // ✅ seu backend lê body.upsell === true
             upsell: intended.mode === "upsell",
 
-            // opcional (seu backend pode ignorar, ok)
+            // opcional
             baseOrderId,
 
             customer: {
@@ -367,32 +475,51 @@ export default function PagamentoPage() {
           }),
         })
 
-        const data = await response.json()
+        let data: any = null
+        try {
+          data = await response.json()
+        } catch {
+          data = null
+        }
 
-        if (!response.ok || data.error) throw new Error(data.error || "Falha ao gerar PIX")
+        // ✅ NOVO: se o backend responder "já pago", não quebra o fluxo e libera novas compras
+        if (data?.alreadyPaid === true || data?.status === "paid") {
+          hardResetPixGeneration()
 
-        const copiaECola: string | null =
-          data.pixCopiaECola ??
-          data.copia_e_cola ??
-          data.pix?.copiaECola ??
-          data.pix?.copia_e_cola ??
-          data.qr_code ??
-          null
+          const paidOrderId =
+            data?.orderId ||
+            orderIdFromUrl ||
+            (typeof window !== "undefined" ? localStorage.getItem("lastPaidOrderId") : null) ||
+            null
 
-        // ✅ CRÍTICO:
-        // transactionId aqui tem que ser o ID DO DB (prisma.transaction.id),
-        // porque /api/transaction-status?id=... busca por esse id.
-        const txDbId: string | null =
-          data.transactionId ??
-          data.transaction?.id ??
-          null
+          if (paidOrderId && typeof window !== "undefined") {
+            localStorage.setItem("lastPaidOrderId", String(paidOrderId))
+          }
 
+          if (paidOrderId) {
+            router.replace(`/pagamento-confirmado?orderId=${paidOrderId}`)
+            return
+          }
+
+          router.replace("/pagamento-confirmado")
+          return
+        }
+
+        // ✅ mantém comportamento atual: se erro, lança
+        if (!response.ok || data?.error) throw new Error(data?.error || "Falha ao gerar PIX")
+
+        const copiaECola = resolveCopiaECola(data)
+        const txDbId = resolveTxDbId(data)
+
+        // ✅ NOVO: falha controlada (não quebra projeto / não fica travado por cacheKey)
         if (!copiaECola) {
           console.error("[pagamento] Resposta da API PIX sem copia e cola:", data)
-          throw new Error("PIX não retornou o código Copia e Cola.")
+          hardResetPixGeneration()
+          throw new Error("Não foi possível gerar o PIX agora. Tente novamente.")
         }
         if (!txDbId) {
           console.error("[pagamento] API PIX veio sem transactionId (DB). Resposta:", data)
+          hardResetPixGeneration()
           throw new Error("PIX gerou, mas não retornou transactionId do sistema.")
         }
 
@@ -404,16 +531,24 @@ export default function PagamentoPage() {
           window.localStorage.setItem("lastFbEventId", String(fbEventIdFromApi))
         }
 
-        const newOrderId = data.orderId || null
+        const newOrderId = data.orderId || null // no upsell isso é o order pendente novo
         if (newOrderId) {
-          setOrderId(newOrderId)
-          if (typeof window !== "undefined") localStorage.setItem("lastOrderId", String(newOrderId))
+          // no main faz sentido setar; no upsell, manter o base orderId como “orderId” do fluxo
+          if (intended.mode === "main") {
+            setOrderId(newOrderId)
+            if (typeof window !== "undefined") localStorage.setItem("lastOrderId", String(newOrderId))
+          }
         }
 
         if (typeof window !== "undefined") {
           const cache: PendingPixCache = {
-            orderId: newOrderId,
-            transactionId: String(txDbId), // ✅ DB id
+            // ✅ MAIN: orderId = newOrderId
+            // ✅ UPSELL: orderId = baseOrderId (pra bater com URL e não quebrar reuso)
+            orderId: intended.mode === "upsell" ? (baseOrderId || orderIdFromUrl || null) : newOrderId,
+            baseOrderId: intended.mode === "upsell" ? (baseOrderId || orderIdFromUrl || null) : null,
+            upsellOrderId: intended.mode === "upsell" ? newOrderId : null,
+
+            transactionId: String(txDbId),
             pixPayload: String(copiaECola),
             amount: intended.amount,
             qty: intended.qty,
@@ -430,10 +565,8 @@ export default function PagamentoPage() {
       } catch (err: any) {
         console.error("Erro ao gerar PIX:", err)
         clearPendingPixCache()
-        setError(err.message || "Erro ao gerar PIX")
+        setError(err?.message || "Erro ao gerar PIX")
         setLoading(false)
-
-        // ✅ libera retry real (novo clique / reload)
         lastRequestKeyRef.current = null
       }
     }
@@ -458,7 +591,7 @@ export default function PagamentoPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router, intended.qty, intended.amount, intended.mode, orderIdFromUrl, pixPayload, transactionId, upsell])
+  }, [router, intended.qty, intended.amount, intended.mode, orderIdFromUrl, pixPayload, transactionId, upsell, isUpsell, upsellReady])
 
   // helper: checa pagamento
   const checkPaymentStatusOnce = async () => {
@@ -471,7 +604,10 @@ export default function PagamentoPage() {
 
     if (data.status === "paid") {
       paidRedirectedRef.current = true
+
+      // ✅ ESSENCIAL PRA ESCALA: limpou? libera novas compras/PIX sem travar
       clearPendingPixCache()
+      lastRequestKeyRef.current = null
 
       let finalOrderId: string | null =
         data.orderId ||
@@ -653,7 +789,7 @@ export default function PagamentoPage() {
               </Stack>
 
               <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
-                Se o gateway retornar QR mas sem txid, consideramos inválido e bloqueamos pra evitar “PIX fantasma”.
+                Se falhar, tente novamente em instantes. O sistema evita duplicar cobranças e recupera pagamentos pendentes automaticamente.
               </Typography>
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
@@ -661,6 +797,8 @@ export default function PagamentoPage() {
                   variant="contained"
                   fullWidth
                   onClick={() => {
+                    // ✅ garante que não fica travado por cacheKey/caches antigos
+                    hardResetPixGeneration()
                     if (typeof window !== "undefined") window.location.reload()
                     else router.refresh()
                   }}
@@ -679,7 +817,10 @@ export default function PagamentoPage() {
                 <Button
                   variant="outlined"
                   fullWidth
-                  onClick={() => router.back()}
+                  onClick={() => {
+                    hardResetPixGeneration()
+                    router.back()
+                  }}
                   sx={{
                     fontWeight: 700,
                     borderRadius: 999,
@@ -861,7 +1002,11 @@ export default function PagamentoPage() {
                 },
               }}
               startIcon={
-                manualChecking ? <CircularProgress size={16} sx={{ color: "#22C55E" }} /> : <Icon icon="mdi:check-circle-outline" width={18} />
+                manualChecking ? (
+                  <CircularProgress size={16} sx={{ color: "#22C55E" }} />
+                ) : (
+                  <Icon icon="mdi:check-circle-outline" width={18} />
+                )
               }
             >
               Já paguei

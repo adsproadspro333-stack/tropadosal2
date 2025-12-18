@@ -1,10 +1,19 @@
 // app/api/minhas-compras/route.ts
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production"
 
 const normalizeCpf = (value: string) => String(value || "").replace(/\D/g, "")
+
+function maskCpf(digits: string) {
+  const d = normalizeCpf(digits)
+  if (d.length !== 11) return ""
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9, 11)}`
+}
 
 // ✅ GET (para chamadas como /api/minhas-compras?cpf=...)
 export async function GET(req: NextRequest) {
@@ -15,39 +24,49 @@ export async function GET(req: NextRequest) {
 
 // ✅ POST (para chamadas via fetch com body)
 export async function POST(req: Request) {
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
   const cpfRaw = String(body?.cpf || "").trim()
   return handleRequest(cpfRaw)
 }
 
-// Lógica central reutilizada
 async function handleRequest(cpfRaw: string) {
   try {
     const cpfDigits = normalizeCpf(cpfRaw)
+    const cpfMasked = maskCpf(cpfDigits)
 
-    if (!IS_PRODUCTION) {
-      console.log("🔎 BUSCA MINHAS COMPRAS CPF:", cpfDigits, "(raw:", cpfRaw, ")")
-    } else {
-      const masked = cpfDigits && cpfDigits.length >= 4 ? cpfDigits.slice(-4) : "unknown"
-      console.log("🔎 BUSCA MINHAS COMPRAS (prod) CPF final:", masked)
-    }
-
-    if (!cpfDigits || cpfDigits.length < 11) {
+    if (!cpfDigits || cpfDigits.length !== 11) {
       return NextResponse.json({ ok: false, error: "CPF inválido" }, { status: 400 })
     }
 
-    // ✅ Busca pedidos direto pelo relacionamento do usuário
-    // Isso evita depender de cpf ser @unique e cobre casos onde cpf antigo foi salvo com máscara.
-    const orders = await prisma.order.findMany({
+    if (!IS_PRODUCTION) {
+      console.log("🔎 MINHAS COMPRAS CPF:", { cpfRaw, cpfDigits, cpfMasked })
+    } else {
+      console.log("🔎 MINHAS COMPRAS (prod) CPF final:", cpfDigits.slice(-4))
+    }
+
+    // ✅ PEGADA CERTA: pega TODOS os users que batem (evita “findFirst” pegar o user errado)
+    const users = await prisma.user.findMany({
       where: {
         OR: [
-          { user: { cpf: cpfDigits } },
-          { user: { cpf: cpfRaw } }, // fallback caso algum registro antigo tenha máscara
+          { cpf: cpfDigits },
+          ...(cpfMasked ? [{ cpf: cpfMasked }] : []),
         ],
       },
+      select: { id: true, cpf: true },
+      take: 10,
+    })
+
+    if (!users.length) {
+      return NextResponse.json({ ok: true, orders: [] }, { status: 200 })
+    }
+
+    const userIds = users.map((u) => u.id)
+
+    const orders = await prisma.order.findMany({
+      where: { userId: { in: userIds } },
       orderBy: { createdAt: "desc" },
       include: {
-        transactions: true,
+        transactions: { orderBy: { createdAt: "desc" } },
         tickets: true,
       },
     })
@@ -79,9 +98,12 @@ async function handleRequest(cpfRaw: string) {
       }
     })
 
-    console.log("✅ Pedidos encontrados:", result.length)
+    if (!IS_PRODUCTION) {
+      console.log("✅ Users encontrados:", users.map((u) => u.cpf))
+      console.log("✅ Pedidos encontrados:", result.length)
+    }
 
-    return NextResponse.json({ ok: true, orders: result })
+    return NextResponse.json({ ok: true, orders: result }, { status: 200 })
   } catch (err: any) {
     console.error("ERRO /api/minhas-compras:", err)
     return NextResponse.json({ ok: false, error: "Erro ao buscar pedidos" }, { status: 500 })

@@ -75,6 +75,10 @@ type UpsellCache = {
   priceCents: number
   createdAt: number
   baseOrderId?: string | null
+
+  // ✅ ajuda a evitar “mistura” de payload antigo (clique/back/refresh)
+  optId?: string | null
+  nonce?: string | null
 }
 
 function coerceNumbersFromOrder(order: OrderDTO | null) {
@@ -116,6 +120,9 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const [order, setOrder] = useState<OrderDTO | null>(null)
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState("dominator")
+
+  // ✅ trava clique duplo / spam (causa nº1 de PIX “budar” no upsell)
+  const [upsellSubmittingId, setUpsellSubmittingId] = useState<string | null>(null)
 
   // ⏱️ Timer total (3:30)
   const TOTAL_TIME = 210
@@ -163,7 +170,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     const eventId = String(order.metaEventId || order.id)
     const orderId = String(order.id)
 
-    // trava de dedupe no browser (evita refresh/voltar duplicar)
     const sentKey = getStorageKey("fbq_purchase_sent", orderId)
     const retryKey = getStorageKey("capi_purchase_retry_called", orderId)
 
@@ -177,7 +183,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         const value = safeNumber(order.amount)
 
-        // ✅ Purchase com eventID (dedupe com CAPI)
         window.fbq("track", "Purchase", { value, currency: "BRL" }, { eventID: eventId })
 
         sessionStorage.setItem(sentKey, "1")
@@ -221,27 +226,43 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const RED = "#DC2626"
   const RED_DARK = "#B91C1C"
 
-  // ✅ grava upsell de forma determinística (o /pagamento vai ler isso)
-  function persistUpsell(opt: { qty: number; priceCents: number }, baseOrderId: string) {
+  function persistUpsell(
+    opt: { qty: number; priceCents: number; optId?: string },
+    baseOrderId: string,
+  ) {
     try {
       if (typeof window === "undefined") return
+
+      // ✅ limpa antes (evita race/back/refresh com payload antigo)
+      localStorage.removeItem(LS_UPSELL_KEY)
+
       const payload: UpsellCache = {
         qty: Math.round(Number(opt.qty || 0)),
         priceCents: Math.round(Number(opt.priceCents || 0)),
         createdAt: Date.now(),
         baseOrderId: baseOrderId || null,
+        optId: opt.optId || null,
+        nonce: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
       }
-      // TTL curto, mas suficiente pra clicar e pagar
+
       localStorage.setItem(LS_UPSELL_KEY, JSON.stringify(payload))
-      // opcional: marca pra debug
+
+      // debug (opcional)
       localStorage.setItem("lastUpsellBaseOrderId", String(baseOrderId || ""))
       localStorage.setItem("lastUpsellPriceCents", String(payload.priceCents))
       localStorage.setItem("lastUpsellQty", String(payload.qty))
+      localStorage.setItem("lastUpsellOptId", String(payload.optId || ""))
+      localStorage.setItem("lastUpsellNonce", String(payload.nonce || ""))
     } catch {}
   }
 
-  function goToUpsellPayment(opt: { qty: number; priceCents: number }) {
+  function goToUpsellPayment(opt: { id: string; qty: number; priceCents: number }) {
     if (!order?.id) return
+    if (secondsLeft <= 0) return
+
+    // ✅ trava spam/clique duplo
+    if (upsellSubmittingId) return
+    setUpsellSubmittingId(opt.id)
 
     // mantém seu store (se você usa em outros lugares)
     try {
@@ -249,10 +270,19 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     } catch {}
 
     // 🔥 garante o valor certo SEM depender do store
-    persistUpsell(opt, order.id)
+    persistUpsell({ qty: opt.qty, priceCents: opt.priceCents, optId: opt.id }, order.id)
 
-    // 🔒 entra no modo upsell no /pagamento e amarra no order base
-    router.push(`/pagamento?upsell=1&orderId=${order.id}`)
+    // ✅ IMPORTANTÍSSIMO:
+    // Passa também por querystring para o /pagamento NUNCA pegar valor antigo
+    // (/pagamento deve priorizar query > localStorage > store)
+    const qs = new URLSearchParams()
+    qs.set("upsell", "1")
+    qs.set("orderId", String(order.id))
+    qs.set("qty", String(opt.qty))
+    qs.set("priceCents", String(opt.priceCents))
+    qs.set("optId", String(opt.id))
+
+    router.push(`/pagamento?${qs.toString()}`)
   }
 
   if (loading || !order) {
@@ -493,6 +523,8 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         color: "rgba(255,255,255,0.86)",
                       }
 
+              const busy = upsellSubmittingId === opt.id
+
               return (
                 <Box
                   key={opt.id}
@@ -512,6 +544,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     transform: active ? "translateY(-1px)" : "translateY(0)",
                     boxShadow: active ? "0 16px 40px rgba(220,38,38,0.22)" : "0 10px 26px rgba(0,0,0,0.25)",
                     overflow: "hidden",
+                    opacity: upsellSubmittingId && !busy ? 0.85 : 1,
                   }}
                 >
                   <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1.5 }}>
@@ -565,10 +598,10 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                   {active && (
                     <Button
                       fullWidth
-                      disabled={secondsLeft <= 0}
+                      disabled={secondsLeft <= 0 || !!upsellSubmittingId}
                       onClick={(e) => {
                         e.stopPropagation()
-                        goToUpsellPayment({ qty: opt.qty, priceCents: opt.priceCents })
+                        goToUpsellPayment({ id: opt.id, qty: opt.qty, priceCents: opt.priceCents })
                       }}
                       sx={{
                         mt: 1.5,
@@ -592,7 +625,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         },
                       }}
                     >
-                      Adicionar {formatQtyLabel(opt.qty)} agora
+                      {busy ? "Gerando PIX..." : `Adicionar ${formatQtyLabel(opt.qty)} agora`}
                     </Button>
                   )}
                 </Box>
