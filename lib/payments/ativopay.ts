@@ -1,8 +1,8 @@
 // lib/payments/ativopay.ts
 // ✅ Mantém o mesmo arquivo/nome para não quebrar imports
 // ✅ Integra com MWBank
-// ✅ Modo SOFT (default): NÃO bloqueia por falta de confirmação via GET /pix/{txid}
-// ✅ Modo STRICT: confirma existência no gateway via GET /pix/{txid} antes de retornar
+// ✅ REMOVIDO: anti "PIX fantasma" (sem GET /pix/{txid}, sem bloqueio rígido)
+// ✅ Objetivo: NÃO travar orderbump e NÃO ficar carregando infinito
 
 type CreatePixParams = {
   amount: number // em centavos
@@ -47,14 +47,11 @@ function normalizeOneLine(value?: string) {
 function normalizeBase64Flexible(value?: string) {
   let v = normalizeOneLine(value)
   if (!v) return ""
-
   v = v.replace(/-/g, "+").replace(/_/g, "/")
-
   const mod = v.length % 4
   if (mod === 2) v += "=="
   else if (mod === 3) v += "="
   else if (mod === 1) return ""
-
   try {
     const buf = Buffer.from(v, "base64")
     if (!buf || buf.length === 0) return ""
@@ -74,6 +71,7 @@ function getEnv() {
   const BASE_URL = (process.env.MWBANK_BASE_URL || "https://core.mwbank.app").replace(/\/+$/, "")
   const CLIENT_ID = (process.env.MWBANK_CLIENT_ID || "").trim()
   const CLIENT_SECRET = (process.env.MWBANK_CLIENT_SECRET || "").trim()
+
   const CERT_CLIENT_BASE64 = normalizeBase64Flexible(process.env.MWBANK_CERT_CLIENT)
 
   const SITE_URL = (process.env.SITE_URL || "").replace(/\/+$/, "")
@@ -81,13 +79,7 @@ function getEnv() {
     (process.env.MWBANK_WEBHOOK_URL || "").trim() ||
     (SITE_URL ? `${SITE_URL}/api/webhook/ativopay` : "")
 
-  const GET_TX_PATH_PREFIX = (process.env.MWBANK_GET_TX_PATH_PREFIX || "/pix/").trim()
-  const GET_TX_PATH_PREFIX_FALLBACK = (process.env.MWBANK_GET_TX_PATH_PREFIX_FALLBACK || "/pix-in/get-transaction/").trim()
-
   const TIMEOUT_MS = Number(process.env.MWBANK_TIMEOUT_MS || 12000)
-
-  // ✅ STRICT_CONFIRM: 1 = confirma via GET /pix/{txid}; 0 = não confirma (SOFT)
-  const STRICT_CONFIRM = String(process.env.MWBANK_STRICT_CONFIRM || "0").trim() === "1"
 
   return {
     BASE_URL,
@@ -95,17 +87,8 @@ function getEnv() {
     CLIENT_SECRET,
     CERT_CLIENT_BASE64,
     DEFAULT_WEBHOOK_URL,
-    GET_TX_PATH_PREFIX,
-    GET_TX_PATH_PREFIX_FALLBACK,
     TIMEOUT_MS,
-    STRICT_CONFIRM,
   }
-}
-
-function buildMwUrl(baseUrl: string, prefixRaw: string, txid: string) {
-  const prefix = (prefixRaw || "/pix/").trim()
-  const p = prefix.startsWith("/") ? prefix : `/${prefix}`
-  return `${baseUrl}${p}${encodeURIComponent(String(txid).trim())}`
 }
 
 const TOKEN_RENEW_SKEW_MS = 90_000
@@ -118,116 +101,6 @@ let inFlightTokenPromise: Promise<string> | null = null
 function invalidateTokenCache() {
   cachedToken = null
   inFlightTokenPromise = null
-}
-
-async function doAuthRequest(opts: {
-  url: string
-  clientId: string
-  certClient: string
-  mode: "no_body" | "json_empty" | "empty_body_with_ct"
-  timeoutMs: number
-}) {
-  const { controller, clear } = withTimeout(opts.timeoutMs)
-  try {
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      client_id: opts.clientId,
-      cert_client: opts.certClient,
-    }
-
-    let init: RequestInit = { method: "POST", headers, signal: controller.signal }
-
-    if (opts.mode === "json_empty") {
-      init = { ...init, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({}) }
-    } else if (opts.mode === "empty_body_with_ct") {
-      init = { ...init, headers: { ...headers, "Content-Type": "application/json" }, body: "" }
-    }
-
-    const res = await fetch(opts.url, init)
-    const text = await res.text()
-
-    let data: any = null
-    try {
-      data = text ? JSON.parse(text) : {}
-    } catch {
-      return { ok: false, status: res.status, text, data: null }
-    }
-
-    return { ok: res.ok, status: res.status, text, data }
-  } finally {
-    clear()
-  }
-}
-
-async function fetchNewAccessToken() {
-  const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS } = getEnv()
-
-  if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
-  if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
-  if (!CERT_CLIENT_BASE64) {
-    throw new Error("MWBANK_CERT_CLIENT inválido/ausente (precisa ser base64 válido em 1 linha, sem aspas/quebras)")
-  }
-
-  const url = `${BASE_URL}/auth/token`
-
-  const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`]
-
-  let last: any = null
-
-  for (const cert_client of certModes) {
-    const a = await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "no_body", timeoutMs: TIMEOUT_MS })
-    const b = a.ok ? null : await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "json_empty", timeoutMs: TIMEOUT_MS })
-    const c = (a.ok || b?.ok) ? null : await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "empty_body_with_ct", timeoutMs: TIMEOUT_MS })
-
-    const best = (a.ok ? a : b?.ok ? b : c) || a
-    last = best
-
-    const data = best.data || {}
-    const success = data?.success
-    const hasError =
-      !!data?.error ||
-      !!data?.message?.toLowerCase?.().includes?.("unauthor") ||
-      success === false
-
-    if (!best.ok || hasError) continue
-
-    const token = data?.access_token || data?.token || data?.data?.access_token || null
-    if (!token) continue
-
-    const expiresInSecRaw = Number(data?.expires_in ?? data?.expiresIn ?? 3600)
-    const expiresInSec = Number.isFinite(expiresInSecRaw) ? expiresInSecRaw : 3600
-    const ttlSec = Math.max(MIN_TTL_SEC, expiresInSec)
-
-    cachedToken = { token: String(token), expiresAt: Date.now() + ttlSec * 1000 }
-    return String(token)
-  }
-
-  const data = last?.data || {}
-  console.error("MWBANK AUTH ERROR:", {
-    httpStatus: last?.status,
-    payload: { success: data?.success, error: data?.error, message: data?.message },
-    client_id: mask(CLIENT_ID),
-    triedCertModes: ["base64", "cert_client+base64"],
-  })
-
-  const reason = data?.error || data?.message || `HTTP ${last?.status} - auth failed`
-  throw new Error(`MWBANK auth falhou: ${reason}`)
-}
-
-async function getAccessToken() {
-  const now = Date.now()
-  if (cachedToken?.token && cachedToken.expiresAt > now + TOKEN_RENEW_SKEW_MS) return cachedToken.token
-  if (inFlightTokenPromise) return inFlightTokenPromise
-
-  inFlightTokenPromise = (async () => {
-    try {
-      return await fetchNewAccessToken()
-    } finally {
-      inFlightTokenPromise = null
-    }
-  })()
-
-  return inFlightTokenPromise
 }
 
 async function mwFetch(url: string, init: RequestInit, timeoutMs: number) {
@@ -252,6 +125,94 @@ function isUnauthorizedPayload(resStatus: number, data: any) {
   return resStatus === 401 || String(msg).toLowerCase().includes("unauthor")
 }
 
+// 🔑 Auth token (cache + retry modos)
+async function doAuthRequest(opts: {
+  url: string
+  clientId: string
+  certClient: string
+  mode: "no_body" | "json_empty" | "empty_body_with_ct"
+  timeoutMs: number
+}) {
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    client_id: opts.clientId,
+    cert_client: opts.certClient,
+  }
+
+  let init: RequestInit = { method: "POST", headers }
+
+  if (opts.mode === "json_empty") {
+    init = { ...init, headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({}) }
+  } else if (opts.mode === "empty_body_with_ct") {
+    init = { ...init, headers: { ...headers, "Content-Type": "application/json" }, body: "" }
+  }
+
+  return await mwFetch(opts.url, init, opts.timeoutMs)
+}
+
+async function fetchNewAccessToken() {
+  const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS } = getEnv()
+
+  if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
+  if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
+  if (!CERT_CLIENT_BASE64) throw new Error("MWBANK_CERT_CLIENT inválido/ausente (base64 em 1 linha)")
+
+  const url = `${BASE_URL}/auth/token`
+
+  // alguns ambientes querem "cert_client" + base64
+  const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
+
+  let last: any = null
+
+  for (const cert_client of certModes) {
+    const a = await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "no_body", timeoutMs: TIMEOUT_MS })
+    if (a.res.ok) {
+      last = a
+    } else {
+      const b = await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "json_empty", timeoutMs: TIMEOUT_MS })
+      last = b.res.ok ? b : await doAuthRequest({ url, clientId: CLIENT_ID, certClient: cert_client, mode: "empty_body_with_ct", timeoutMs: TIMEOUT_MS })
+    }
+
+    const data = last.data || {}
+    if (!last.res.ok || data?.error || (data?.message && String(data.message).toLowerCase().includes("unauthor"))) continue
+
+    const token = data?.access_token || data?.token || data?.data?.access_token || null
+    if (!token) continue
+
+    const expiresInSecRaw = Number(data?.expires_in ?? data?.expiresIn ?? 3600)
+    const expiresInSec = Number.isFinite(expiresInSecRaw) ? expiresInSecRaw : 3600
+    const ttlSec = Math.max(MIN_TTL_SEC, expiresInSec)
+
+    cachedToken = { token: String(token), expiresAt: Date.now() + ttlSec * 1000 }
+    return String(token)
+  }
+
+  console.error("MWBANK AUTH ERROR:", {
+    httpStatus: last?.res?.status,
+    payloadPreview: last?.data,
+    client_id: mask(getEnv().CLIENT_ID),
+  })
+
+  const reason = last?.data?.error || last?.data?.message || `HTTP ${last?.res?.status}`
+  throw new Error(`MWBANK auth falhou: ${reason}`)
+}
+
+async function getAccessToken() {
+  const now = Date.now()
+  if (cachedToken?.token && cachedToken.expiresAt > now + TOKEN_RENEW_SKEW_MS) return cachedToken.token
+  if (inFlightTokenPromise) return inFlightTokenPromise
+
+  inFlightTokenPromise = (async () => {
+    try {
+      return await fetchNewAccessToken()
+    } finally {
+      inFlightTokenPromise = null
+    }
+  })()
+
+  return inFlightTokenPromise
+}
+
 function buildMwHeaders(opts: {
   clientId: string
   accessToken?: string
@@ -264,15 +225,17 @@ function buildMwHeaders(opts: {
     client_id: opts.clientId,
   }
 
+  // alguns ambientes aceitam Bearer; outros aceitam access_token header
   if (opts.accessToken) {
     headers.Authorization = `Bearer ${opts.accessToken}`
     headers.access_token = String(opts.accessToken)
   }
 
+  // alguns ambientes exigem esses headers também no /pix
   if (opts.certClient) headers.cert_client = opts.certClient
   if (opts.clientSecret) headers.client_secret = opts.clientSecret
-  if (opts.contentTypeJson) headers["Content-Type"] = "application/json"
 
+  if (opts.contentTypeJson) headers["Content-Type"] = "application/json"
   return headers
 }
 
@@ -281,7 +244,18 @@ function pickCreatedPix(data: any) {
   const d = root.data || root
 
   const txid = d?.txid || root?.txid || d?.transactionId || root?.transactionId || null
-  const copia = d?.pixCopiaECola || root?.pixCopiaECola || null
+
+  const copia =
+    d?.pixCopiaECola ||
+    root?.pixCopiaECola ||
+    d?.copiaECola ||
+    root?.copiaECola ||
+    d?.brCode ||
+    root?.brCode ||
+    d?.payload ||
+    root?.payload ||
+    null
+
   const qr = d?.qrCode || root?.qrCode || null
   const status = d?.status || root?.status || null
 
@@ -294,82 +268,8 @@ function pickCreatedPix(data: any) {
   }
 }
 
-function pickGetTx(data: any) {
-  const root = data || {}
-  const d = root.data || root
-
-  const txid = d?.txid || root?.txid || null
-  const status = d?.status || root?.status || d?.statusTransaction || root?.statusTransaction || null
-  const copia = d?.pixCopiaECola || root?.pixCopiaECola || null
-  const qr = d?.qrCode || root?.qrCode || null
-
-  return {
-    txid: txid ? String(txid).trim() : null,
-    status: status ? String(status) : null,
-    copia: copia ? String(copia).trim() : null,
-    qr: qr ? String(qr).trim() : null,
-    raw: data,
-  }
-}
-
-async function getTransactionFromGateway(txid: string) {
-  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, GET_TX_PATH_PREFIX, GET_TX_PATH_PREFIX_FALLBACK, TIMEOUT_MS } = getEnv()
-
-  let accessToken = await getAccessToken()
-  const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
-
-  const doGet = async (url: string, cert_client?: string) => {
-    return await mwFetch(
-      url,
-      {
-        method: "GET",
-        headers: buildMwHeaders({
-          clientId: CLIENT_ID,
-          accessToken,
-          certClient: cert_client,
-          clientSecret: CLIENT_SECRET || undefined,
-        }),
-      },
-      TIMEOUT_MS,
-    )
-  }
-
-  const tryUrl = async (url: string) => {
-    let last: any = null
-    for (const cert_client of certModes) {
-      let r = await doGet(url, cert_client)
-
-      if (!r.res.ok && isUnauthorizedPayload(r.res.status, r.data)) {
-        invalidateTokenCache()
-        accessToken = await getAccessToken()
-        r = await doGet(url, cert_client)
-      }
-
-      last = r
-      if (r.res.ok && r.data) return r
-    }
-    return last
-  }
-
-  const url1 = buildMwUrl(BASE_URL, GET_TX_PATH_PREFIX, txid)
-  const r1 = await tryUrl(url1)
-  if (r1?.res?.ok && r1.data) return { ok: true, status: r1.res.status, data: r1.data, url: url1 }
-
-  const url2 = buildMwUrl(BASE_URL, GET_TX_PATH_PREFIX_FALLBACK, txid)
-  const r2 = await tryUrl(url2)
-  if (r2?.res?.ok && r2.data) return { ok: true, status: r2.res.status, data: r2.data, url: url2 }
-
-  return {
-    ok: false,
-    status: r2?.res?.status || r1?.res?.status,
-    data: r2?.data || r1?.data,
-    text: (r2?.text || r1?.text || "").slice(0, 1200),
-    urlTried: { url1, url2 },
-  }
-}
-
 export async function createPixTransaction(params: CreatePixParams) {
-  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS, STRICT_CONFIRM } = getEnv()
+  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS } = getEnv()
 
   if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
   if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
@@ -414,9 +314,12 @@ export async function createPixTransaction(params: CreatePixParams) {
   }
 
   let created: any = null
-  for (const cert_client of certModes) {
+
+  // tenta com variações de cert_client (alguns ambientes mudam a exigência)
+  for (const cert_client of certModes.length ? certModes : [undefined]) {
     created = await doCreate(cert_client)
 
+    // retry 1x em unauthorized
     if (!created.res.ok && isUnauthorizedPayload(created.res.status, created.data)) {
       invalidateTokenCache()
       accessToken = await getAccessToken()
@@ -426,85 +329,33 @@ export async function createPixTransaction(params: CreatePixParams) {
     if (created.res.ok) break
   }
 
+  // ❗️não bloquear por "pix fantasma": apenas reportar erro do gateway
   if (!created?.res?.ok) {
     console.error("MWBANK CREATE PIX ERROR:", {
       status: created?.res?.status,
+      payload: created?.data,
       body: created?.text?.slice(0, 1200),
       code: externalRef,
       amount: amountBRL,
       client_id: mask(CLIENT_ID),
       has_client_secret: !!CLIENT_SECRET,
       has_cert_client: !!CERT_CLIENT_BASE64,
-      strictConfirm: STRICT_CONFIRM,
     })
-    throw new Error(`Falha ao gerar PIX (MWBANK) (HTTP ${created?.res?.status}): ${created?.text}`)
+
+    // mantém mensagem genérica pro route.ts tratar (ele já devolve 500/503)
+    throw new Error("Falha ao gerar PIX (MWBANK).")
   }
 
   const picked = pickCreatedPix(created.data)
 
-  // ✅ regra mínima pra não virar caos:
-  // se não vier txid+copia, não tem como o front pagar.
-  if (!picked.txid || !picked.copia) {
-    console.error("MWBANK CREATE PIX: resposta sem TXID/pixCopiaECola:", {
-      keys: Object.keys(created.data || {}),
-      dataPreview: created.data,
-      code: externalRef,
-      amount: amountBRL,
-      strictConfirm: STRICT_CONFIRM,
-    })
-    throw new Error("MWBANK: resposta sem txid/pixCopiaECola.")
-  }
-
-  // ✅ SOFT MODE: não confirma no GET (menos chamadas, menos chance de travar)
-  if (!STRICT_CONFIRM) {
-    return {
-      raw: { created: created.data },
-      transactionId: picked.txid,
-      amount: amountBRL,
-      status: picked.status || null,
-      pixCopiaECola: picked.copia,
-      qrCodeBase64: null,
-      expiresAt: null,
-    }
-  }
-
-  // ✅ STRICT MODE (opcional): confirma via GET antes de retornar
-  const check = await getTransactionFromGateway(picked.txid)
-  if (!check.ok) {
-    console.error("MWBANK STRICT: txid não confirmado no gateway (bloqueado):", {
-      txid: picked.txid,
-      code: externalRef,
-      amount: amountBRL,
-      httpStatus: check.status,
-      text: (check as any)?.text,
-      urlTried: (check as any)?.urlTried,
-    })
-    throw new Error("MWBANK: txid não confirmado no gateway (strict).")
-  }
-
-  const gw = pickGetTx(check.data)
-
-  if (!gw.txid || String(gw.txid).trim() !== String(picked.txid).trim()) {
-    console.error("MWBANK STRICT: retorno inconsistente:", {
-      expected: picked.txid,
-      got: gw.txid,
-      url: (check as any)?.url,
-      dataPreview: check.data,
-    })
-    throw new Error("MWBANK: retorno inconsistente ao confirmar transação (strict).")
-  }
-
-  const finalCopia = gw.copia || picked.copia
-  if (!finalCopia) {
-    throw new Error("MWBANK: confirmado mas sem pixCopiaECola (strict).")
-  }
-
+  // ✅ aqui não bloqueia mais o fluxo inteiro com lógica rígida:
+  // se vier sem copia/txid, a rota /pagamento/pix vai tratar e mostrar “tente novamente”
   return {
-    raw: { created: created.data, confirmed: check.data },
-    transactionId: picked.txid,
+    raw: { created: created.data },
+    transactionId: picked.txid, // pode ser null
     amount: amountBRL,
-    status: gw.status || picked.status || null,
-    pixCopiaECola: finalCopia,
+    status: picked.status || null,
+    pixCopiaECola: picked.copia, // pode ser null
     qrCodeBase64: null,
     expiresAt: null,
   }
