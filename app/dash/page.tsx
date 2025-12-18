@@ -22,6 +22,7 @@ import {
   IconButton,
   Tooltip,
   TableContainer,
+  Pagination,
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 
@@ -34,7 +35,7 @@ type Overview = {
   transactionsTotal: number
   paidOrders: number
 
-  // (opcional, se você já adicionou no seu backend/overview)
+  // opcional (se vier do backend algum dia)
   paidValue?: number
   pendingValue?: number
   totalValue?: number
@@ -51,6 +52,16 @@ type Row = {
   cpf: string | null
   phone: string | null
   email: string | null
+}
+
+type OrdersResponse = {
+  ok: boolean
+  rows: Row[]
+  total: number
+  page: number
+  pages: number
+  limit: number
+  error?: string
 }
 
 function formatBRL(v: number) {
@@ -154,39 +165,51 @@ export default function DashPage() {
   const [q, setQ] = useState("")
 
   const [overview, setOverview] = useState<Overview | null>(null)
+
   const [rows, setRows] = useState<Row[]>([])
   const [limit, setLimit] = useState(50)
+
+  // ✅ paginação real
+  const [page, setPage] = useState(1)
+  const [pages, setPages] = useState(1)
+  const [total, setTotal] = useState(0)
 
   const [loadingTop, setLoadingTop] = useState(false)
   const [loadingList, setLoadingList] = useState(false)
   const [errTop, setErrTop] = useState<string | null>(null)
   const [errList, setErrList] = useState<string | null>(null)
 
-  // Somatórios da lista (pra cards de valor sem depender do backend)
+  // Somatórios da lista (por página / filtro atual)
   const listTotals = useMemo(() => {
     let paid = 0
     let pending = 0
-    let total = 0
+    let totalSum = 0
 
     for (const r of rows) {
       const v = Number(r.value || 0)
-      total += v
+      totalSum += v
       const st = String(r.status || "").toLowerCase()
       if (st === "paid") paid += v
       else if (st === "pending" || st === "waiting_payment") pending += v
     }
 
-    return { paid, pending, total }
+    return { paid, pending, total: totalSum }
   }, [rows])
+
+  // ✅ sempre que mudar filtro/limite, volta pra página 1
+  useEffect(() => {
+    setPage(1)
+  }, [range, status, limit, q])
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams()
     params.set("range", range)
     params.set("status", status)
     params.set("limit", String(limit))
+    params.set("page", String(page))
     if (q.trim()) params.set("q", q.trim())
     return params.toString()
-  }, [range, status, limit, q])
+  }, [range, status, limit, q, page])
 
   async function loadOverview() {
     setErrTop(null)
@@ -209,12 +232,21 @@ export default function DashPage() {
     setLoadingList(true)
     try {
       const res = await fetch(`/api/dash/orders?${queryString}`, { cache: "no-store" })
-      const data = await res.json().catch(() => null)
-      if (!res.ok || !data?.ok) throw new Error(data?.error || "Falha ao carregar transações")
-      setRows(Array.isArray(data?.rows) ? data.rows : [])
+      const data = (await res.json().catch(() => null)) as OrdersResponse | null
+      if (!res.ok || !data?.ok) throw new Error((data as any)?.error || "Falha ao carregar transações")
+
+      setRows(Array.isArray(data?.rows) ? data!.rows : [])
+      setTotal(Number(data?.total || 0))
+      setPages(Math.max(1, Number(data?.pages || 1)))
+
+      // se a API “corrigir” page, acompanha
+      const apiPage = Math.max(1, Number(data?.page || 1))
+      if (apiPage !== page) setPage(apiPage)
     } catch (e: any) {
       setErrList(e?.message || "Falha ao carregar transações")
       setRows([])
+      setTotal(0)
+      setPages(1)
     } finally {
       setLoadingList(false)
     }
@@ -319,7 +351,7 @@ export default function DashPage() {
                   </Typography>
                 </Box>
 
-                {/* Valores (na lista) */}
+                {/* Valores (na lista - por página/filtro atual) */}
                 <Box
                   sx={{
                     p: 1.2,
@@ -439,7 +471,7 @@ export default function DashPage() {
             </Stack>
           </Paper>
 
-          {/* Lista/Tabela com scroll interno */}
+          {/* Lista/Tabela com scroll interno + paginação numérica */}
           <Paper
             elevation={0}
             sx={{
@@ -465,137 +497,186 @@ export default function DashPage() {
                 <Typography sx={{ color: "#EF4444", fontWeight: 800, fontSize: "0.9rem" }}>{errList}</Typography>
               </Box>
             ) : (
-              <TableContainer
-                sx={{
-                  // ✅ Scroll dentro da lista (não da página)
-                  maxHeight: { xs: "62vh", sm: "58vh" },
-                  overflowY: "auto",
-                  overflowX: "auto",
-                  WebkitOverflowScrolling: "touch",
-                  borderTop: "1px solid rgba(255,255,255,0.08)",
-                }}
-              >
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      {[
-                        "Data",
-                        "Cliente",
-                        "CPF",
-                        "Telefone",
-                        "Email",
-                        "Valor",
-                        "Status",
-                        "OrderId",
-                        "GatewayId",
-                        "Ações",
-                      ].map((h, idx) => (
-                        <TableCell
-                          key={h}
-                          align={h === "Ações" ? "right" : "left"}
-                          sx={{
-                            color: "rgba(255,255,255,0.75)",
-                            fontWeight: 900,
-                            // ✅ header fixo com fundo consistente
-                            bgcolor: "rgba(11,15,25,0.92)",
-                            backdropFilter: "blur(8px)",
-                            borderBottom: "1px solid rgba(255,255,255,0.10)",
-                            whiteSpace: "nowrap",
-                            ...(idx === 0 ? { position: "sticky", left: 0, zIndex: 3 } : {}),
-                          }}
-                        >
-                          {h}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  </TableHead>
-
-                  <TableBody>
-                    {rows.length === 0 && !loadingList ? (
+              <>
+                <TableContainer
+                  sx={{
+                    maxHeight: { xs: "62vh", sm: "58vh" },
+                    overflowY: "auto",
+                    overflowX: "auto",
+                    WebkitOverflowScrolling: "touch",
+                    borderTop: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <Table size="small" stickyHeader>
+                    <TableHead>
                       <TableRow>
-                        <TableCell colSpan={10} sx={{ color: "rgba(255,255,255,0.65)" }}>
-                          Nenhuma transação encontrada.
-                        </TableCell>
+                        {["Data", "Cliente", "CPF", "Telefone", "Email", "Valor", "Status", "OrderId", "GatewayId", "Ações"].map(
+                          (h, idx) => (
+                            <TableCell
+                              key={h}
+                              align={h === "Ações" ? "right" : "left"}
+                              sx={{
+                                color: "rgba(255,255,255,0.75)",
+                                fontWeight: 900,
+                                bgcolor: "rgba(11,15,25,0.92)",
+                                backdropFilter: "blur(8px)",
+                                borderBottom: "1px solid rgba(255,255,255,0.10)",
+                                whiteSpace: "nowrap",
+                                ...(idx === 0 ? { position: "sticky", left: 0, zIndex: 3 } : {}),
+                              }}
+                            >
+                              {h}
+                            </TableCell>
+                          ),
+                        )}
                       </TableRow>
-                    ) : (
-                      rows.map((r) => (
-                        <TableRow key={r.transactionId} hover>
-                          <TableCell
-                            sx={{
-                              color: "rgba(255,255,255,0.85)",
-                              whiteSpace: "nowrap",
-                              // (opcional) primeira coluna “presa” pra não perder referência
-                              position: "sticky",
-                              left: 0,
-                              zIndex: 2,
-                              bgcolor: "rgba(11,15,25,0.86)",
-                              borderRight: "1px solid rgba(255,255,255,0.06)",
-                            }}
-                          >
-                            {formatDateSP(r.createdAt)}
-                          </TableCell>
+                    </TableHead>
 
-                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 800, minWidth: 180 }}>
-                            {r.name || "—"}
-                          </TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 140 }}>
-                            {maskCpf(r.cpf)}
-                          </TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 160 }}>
-                            {maskPhone(r.phone)}
-                          </TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", minWidth: 220 }}>
-                            {r.email || "—"}
-                          </TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 900, whiteSpace: "nowrap", minWidth: 110 }}>
-                            {formatBRL(Number(r.value || 0))}
-                          </TableCell>
-
-                          <TableCell sx={{ minWidth: 110 }}>{statusChip(r.status)}</TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem", minWidth: 260 }}>
-                            {r.orderId}
-                          </TableCell>
-
-                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem", minWidth: 260 }}>
-                            {r.gatewayId || "—"}
-                          </TableCell>
-
-                          <TableCell align="right" sx={{ minWidth: 110 }}>
-                            <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                              <Tooltip title="Copiar OrderId">
-                                <IconButton
-                                  size="small"
-                                  onClick={() => navigator.clipboard.writeText(r.orderId)}
-                                  sx={{ color: "rgba(255,255,255,0.75)" }}
-                                >
-                                  <Icon icon="mdi:content-copy" width={18} />
-                                </IconButton>
-                              </Tooltip>
-                              <Tooltip title="Copiar GatewayId">
-                                <span>
-                                  <IconButton
-                                    size="small"
-                                    disabled={!r.gatewayId}
-                                    onClick={() => r.gatewayId && navigator.clipboard.writeText(r.gatewayId)}
-                                    sx={{ color: "rgba(255,255,255,0.75)" }}
-                                  >
-                                    <Icon icon="mdi:barcode-scan" width={18} />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            </Stack>
+                    <TableBody>
+                      {rows.length === 0 && !loadingList ? (
+                        <TableRow>
+                          <TableCell colSpan={10} sx={{ color: "rgba(255,255,255,0.65)" }}>
+                            Nenhuma transação encontrada.
                           </TableCell>
                         </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </TableContainer>
+                      ) : (
+                        rows.map((r) => (
+                          <TableRow key={r.transactionId} hover>
+                            <TableCell
+                              sx={{
+                                color: "rgba(255,255,255,0.85)",
+                                whiteSpace: "nowrap",
+                                position: "sticky",
+                                left: 0,
+                                zIndex: 2,
+                                bgcolor: "rgba(11,15,25,0.86)",
+                                borderRight: "1px solid rgba(255,255,255,0.06)",
+                              }}
+                            >
+                              {formatDateSP(r.createdAt)}
+                            </TableCell>
+
+                            <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 800, minWidth: 180 }}>
+                              {r.name || "—"}
+                            </TableCell>
+
+                            <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 140 }}>
+                              {maskCpf(r.cpf)}
+                            </TableCell>
+
+                            <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 160 }}>
+                              {maskPhone(r.phone)}
+                            </TableCell>
+
+                            <TableCell sx={{ color: "rgba(255,255,255,0.85)", minWidth: 220 }}>
+                              {r.email || "—"}
+                            </TableCell>
+
+                            <TableCell
+                              sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 900, whiteSpace: "nowrap", minWidth: 110 }}
+                            >
+                              {formatBRL(Number(r.value || 0))}
+                            </TableCell>
+
+                            <TableCell sx={{ minWidth: 110 }}>{statusChip(r.status)}</TableCell>
+
+                            <TableCell
+                              sx={{
+                                color: "rgba(255,255,255,0.78)",
+                                fontFamily: "monospace",
+                                fontSize: "0.78rem",
+                                minWidth: 260,
+                              }}
+                            >
+                              {r.orderId}
+                            </TableCell>
+
+                            <TableCell
+                              sx={{
+                                color: "rgba(255,255,255,0.78)",
+                                fontFamily: "monospace",
+                                fontSize: "0.78rem",
+                                minWidth: 260,
+                              }}
+                            >
+                              {r.gatewayId || "—"}
+                            </TableCell>
+
+                            <TableCell align="right" sx={{ minWidth: 110 }}>
+                              <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                                <Tooltip title="Copiar OrderId">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => navigator.clipboard.writeText(r.orderId)}
+                                    sx={{ color: "rgba(255,255,255,0.75)" }}
+                                  >
+                                    <Icon icon="mdi:content-copy" width={18} />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title="Copiar GatewayId">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      disabled={!r.gatewayId}
+                                      onClick={() => r.gatewayId && navigator.clipboard.writeText(r.gatewayId)}
+                                      sx={{ color: "rgba(255,255,255,0.75)" }}
+                                    >
+                                      <Icon icon="mdi:barcode-scan" width={18} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              </Stack>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+
+                {/* ✅ paginação numérica (fora do scroll da tabela) */}
+                {pages > 1 && (
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 2,
+                      p: 1.5,
+                      borderTop: "1px solid rgba(255,255,255,0.08)",
+                      bgcolor: "rgba(11,15,25,0.35)",
+                    }}
+                  >
+                    <Pagination
+                      count={pages}
+                      page={page}
+                      onChange={(_, p) => setPage(p)}
+                      size="small"
+                      hidePrevButton
+                      hideNextButton
+                      siblingCount={1}
+                      boundaryCount={1}
+                      variant="outlined"
+                      shape="rounded"
+                      sx={{
+                        "& .MuiPaginationItem-root": {
+                          color: "rgba(255,255,255,0.85)",
+                          borderColor: "rgba(255,255,255,0.14)",
+                          fontWeight: 900,
+                        },
+                        "& .MuiPaginationItem-root.Mui-selected": {
+                          borderColor: "rgba(34,197,94,0.45)",
+                          bgcolor: "rgba(34,197,94,0.14)",
+                        },
+                      }}
+                    />
+
+                    <Typography sx={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", whiteSpace: "nowrap" }}>
+                      {total > 0 ? `Total: ${total}` : ""}
+                    </Typography>
+                  </Box>
+                )}
+              </>
             )}
           </Paper>
 
