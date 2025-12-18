@@ -13,10 +13,6 @@ import { sendPushcutNotification } from "@/lib/pushcut"
 const PUSHCUT_ORDER_CREATED_URL = process.env.PUSHCUT_ORDER_CREATED_URL
 const isProduction = process.env.NODE_ENV === "production"
 
-// 🔒 Janela de idempotência
-const IDEMPOTENCY_WINDOW_MINUTES = 30
-const IDEMPOTENCY_WINDOW_MS = IDEMPOTENCY_WINDOW_MINUTES * 60 * 1000
-
 function parseCookies(cookieHeader: string | null): Record<string, string> {
   if (!cookieHeader) return {}
   const out: Record<string, string> = {}
@@ -40,31 +36,8 @@ function getClientIp(headers: Headers): string | undefined {
   return ip || undefined
 }
 
-function sha256Hex(value: string) {
-  return crypto.createHash("sha256").update(value).digest("hex")
-}
-
 function normalizeDigits(v: any) {
   return String(v || "").replace(/\D/g, "")
-}
-
-function buildIntentKey(input: {
-  createdFrom: "main" | "upsell"
-  cpf: string
-  amountInCents: number
-  qty: number
-  baseOrderId?: string | null
-  providedOrderId?: string | null
-}) {
-  const createdFrom = input.createdFrom
-  const cpf = normalizeDigits(input.cpf)
-  const amountInCents = Math.max(0, Math.round(Number(input.amountInCents || 0)))
-  const qty = Math.max(0, Math.round(Number(input.qty || 0)))
-  const baseOrderId = String(input.baseOrderId || "").trim()
-  const providedOrderId = String(input.providedOrderId || "").trim()
-
-  const raw = `v1|mode:${createdFrom}|cpf:${cpf}|amt:${amountInCents}|qty:${qty}|base:${baseOrderId}|order:${providedOrderId}`
-  return sha256Hex(raw)
 }
 
 function buildMetaString(input: {
@@ -73,10 +46,9 @@ function buildMetaString(input: {
   clientIpAddress?: string
   userAgent?: string
   createdFrom: "main" | "upsell"
-  intentKey: string
+  requestId: string
   baseOrderId?: string | null
   providedOrderId?: string | null
-  requestId: string
   provider?: {
     id?: string | null
     gatewayId?: string | null
@@ -90,7 +62,6 @@ function buildMetaString(input: {
     ...(input.clientIpAddress ? { clientIpAddress: input.clientIpAddress } : {}),
     ...(input.userAgent ? { clientUserAgent: input.userAgent } : {}),
 
-    intentKey: input.intentKey,
     requestId: input.requestId,
     createdFrom: input.createdFrom,
     ...(input.baseOrderId ? { baseOrderId: String(input.baseOrderId) } : {}),
@@ -114,8 +85,9 @@ function buildMetaString(input: {
 }
 
 function pixUnavailableResponse(extra?: any) {
-  // ✅ agora loga em prod também (sem vazar payload gigante)
-  console.error("[pix] PIX indisponível agora:", extra)
+  if (!isProduction) {
+    console.error("[pix] PIX indisponível agora:", extra)
+  }
   return NextResponse.json(
     { ok: false, error: "PIX indisponível no momento. Tente novamente em instantes." },
     { status: 503 },
@@ -160,112 +132,34 @@ function resolveGatewayId(resp: any) {
   return s || null
 }
 
-// ✅ DEEP SEARCH: acha BR Code Pix em qualquer lugar do JSON (procura por "000201")
-function deepFindPixBrCode(obj: any): string | null {
-  const seen = new Set<any>()
-
-  const looksLikePix = (s: string) => {
-    const v = String(s || "").trim()
-    // Pix "copia e cola" (EMV) quase sempre começa com 000201
-    if (!v) return false
-    if (v.length < 40) return false
-    return v.startsWith("000201") || v.includes("000201")
-  }
-
-  const visit = (node: any): string | null => {
-    if (node === null || node === undefined) return null
-    if (typeof node === "string") {
-      const v = node.trim()
-      if (looksLikePix(v)) return v.startsWith("000201") ? v : v.slice(v.indexOf("000201"))
-      return null
-    }
-    if (typeof node !== "object") return null
-    if (seen.has(node)) return null
-    seen.add(node)
-
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const found = visit(item)
-        if (found) return found
-      }
-      return null
-    }
-
-    for (const k of Object.keys(node)) {
-      const found = visit(node[k])
-      if (found) return found
-    }
-    return null
-  }
-
-  return visit(obj)
-}
-
-// ✅ resolve Copia e Cola em múltiplos formatos + deep search
 function resolvePixCopiaECola(resp: any) {
   const v =
     resp?.pixCopiaECola ??
     resp?.copiaECola ??
     resp?.copia_e_cola ??
     resp?.brCode ??
-    resp?.br_code ??
-    resp?.emv ??
     resp?.payload ??
-    resp?.copyPaste ??
-    resp?.copy_paste ??
     resp?.pix?.copiaECola ??
     resp?.pix?.copia_e_cola ??
-    resp?.pix?.brCode ??
-    resp?.pix?.payload ??
     resp?.raw?.data?.pixCopiaECola ??
     resp?.raw?.data?.copia_e_cola ??
     resp?.raw?.data?.brCode ??
-    resp?.raw?.data?.br_code ??
-    resp?.raw?.data?.emv ??
-    resp?.raw?.data?.payload ??
     resp?.raw?.pixCopiaECola ??
     resp?.raw?.copia_e_cola ??
-    resp?.raw?.brCode ??
-    resp?.raw?.br_code ??
-    resp?.raw?.payload ??
     null
 
   const s = String(v || "").trim()
-  if (s) return s
-
-  // ✅ fallback final: caça o BR Code no JSON inteiro
-  const deep = deepFindPixBrCode(resp?.raw ?? resp)
-  return deep ? String(deep).trim() : null
-}
-
-function canReuseExistingTx(existingTx: any) {
-  if (!existingTx) return false
-  const pix = String(existingTx.pixCopiaCola || "").trim()
-  if (!pix) return false
-  return true
-}
-
-async function findReusableTxByIntent(intentKey: string, since: Date) {
-  if (!intentKey) return null
-  const needle = `"intentKey":"${intentKey}"`
-  const tx = await prisma.transaction.findFirst({
-    where: {
-      createdAt: { gte: since },
-      meta: { contains: needle },
-    },
-    orderBy: { createdAt: "desc" },
-    include: { order: true },
-  })
-  if (!tx) return null
-  if (!canReuseExistingTx(tx)) return null
-  return tx
+  return s || null
 }
 
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: string; isUpsell: boolean }) {
+async function createPixWithRetry(
+  args: any,
+  ctx: { requestId: string; orderId: string; isUpsell: boolean },
+) {
   const maxAttempts = 2
   let lastErr: any = null
 
@@ -298,7 +192,6 @@ async function registerFailedTransaction(params: {
   orderId: string
   amountInCents: number
   createdFrom: "main" | "upsell"
-  intentKey: string
   requestId: string
   fbp?: string
   fbc?: string
@@ -318,7 +211,6 @@ async function registerFailedTransaction(params: {
       clientIpAddress: params.clientIpAddress,
       userAgent: params.userAgent,
       createdFrom: params.createdFrom,
-      intentKey: params.intentKey,
       baseOrderId: params.baseOrderId || null,
       providedOrderId: params.providedOrderId || null,
       requestId: params.requestId,
@@ -382,8 +274,9 @@ export async function POST(req: Request) {
 
     const createdFrom: "main" | "upsell" = isUpsell ? "upsell" : "main"
 
-    const upsellSource = String(body?.source || body?.origin || body?.context || body?.from || "").toLowerCase()
-    const allowUpsellReuse = Boolean(body?.allowUpsellReuse === true || body?.dedupeUpsell === true)
+    const upsellSource = String(
+      body?.source || body?.origin || body?.context || body?.from || "",
+    ).toLowerCase()
 
     const baseOrderIdRaw =
       body?.baseOrderId ??
@@ -395,10 +288,15 @@ export async function POST(req: Request) {
     const providedOrderIdRaw = body?.orderId ?? body?.order_id ?? null
     const providedOrderIdStr = String(providedOrderIdRaw || "").trim() || null
 
+    // ✅ IMPORTANTÍSSIMO:
+    // - no upsell do "Minhas Compras", geralmente vem só orderId => usamos isso como baseOrderId
     const baseOrderIdStr = String(baseOrderIdRaw || "").trim() || null
-    const baseOrderId = isUpsell ? (baseOrderIdStr || providedOrderIdStr) : baseOrderIdStr
+    const baseOrderId = isUpsell ? baseOrderIdStr || providedOrderIdStr : baseOrderIdStr
+
+    // para main pode vir orderId amarrado pela URL
     const providedOrderId = !isUpsell ? providedOrderIdStr : null
 
+    // ✅ upsell PRECISA de baseOrderId (pra não misturar pedidos)
     if (isUpsell && !baseOrderId) {
       return NextResponse.json(
         { ok: false, error: "Upsell precisa do orderId/baseOrderId do pedido base." },
@@ -410,20 +308,24 @@ export async function POST(req: Request) {
     // VALOR TOTAL
     // -------------------------------------------------
     let totalInCents = Number(body?.totalInCents ?? 0)
+
     if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
       const rawAmount = body?.amountInCents ?? body?.amount
       const amountNum = Number(rawAmount)
       totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
+
     if (!totalInCents || totalInCents <= 0) {
       return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
+
     const amountInCents = Math.round(totalInCents)
 
     // -------------------------------------------------
     // QTD (ANTI-BURLO)
     // -------------------------------------------------
     let effectiveQty = 0
+
     const bodyQty = Math.round(Number(body?.quantity || 0))
     const numbersLen = Array.isArray(body?.numbers) ? body.numbers.length : 0
 
@@ -433,6 +335,7 @@ export async function POST(req: Request) {
       body?.extraNumbers ??
       body?.qty ??
       null
+
     const upsellQty = Math.round(Number(upsellQtyRaw || 0))
 
     if (isUpsell) {
@@ -460,8 +363,8 @@ export async function POST(req: Request) {
     // CLIENTE
     // -------------------------------------------------
     const customer = body?.customer || {}
-    const documentNumber = String(customer?.documentNumber || "").replace(/\D/g, "")
-    const phone = String(customer?.phone || "").replace(/\D/g, "")
+    const documentNumber = normalizeDigits(customer?.documentNumber || "")
+    const phone = normalizeDigits(customer?.phone || "")
     const email: string | null = customer?.email || null
     const fullName: string | null = customer?.name || null
 
@@ -476,6 +379,7 @@ export async function POST(req: Request) {
     if (email) orConditions.push({ email })
 
     let user = await prisma.user.findFirst({ where: { OR: orConditions } })
+
     if (!user) {
       try {
         const firstName = fullName?.split(" ")[0] || null
@@ -495,256 +399,192 @@ export async function POST(req: Request) {
         else throw err
       }
     }
+
     if (!user) throw new Error("Usuário não encontrado")
 
-    const now = Date.now()
-    const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
-
-    const intentKey = buildIntentKey({
-      createdFrom,
-      cpf: documentNumber,
-      amountInCents,
-      qty: effectiveQty,
-      baseOrderId: isUpsell ? baseOrderId : null,
-      providedOrderId: !isUpsell ? providedOrderId : null,
-    })
-
-    // ✅ REUSO por intentKey: SOMENTE MAIN
-    if (!isUpsell) {
-      const reusableByIntent = await findReusableTxByIntent(intentKey, since)
-      if (reusableByIntent) {
-        return NextResponse.json(
-          {
-            ok: true,
-            reused: true,
-            orderId: reusableByIntent.orderId,
-            transactionId: reusableByIntent.id,
-            gatewayId: reusableByIntent.gatewayId || null,
-            pixCopiaECola: reusableByIntent.pixCopiaCola,
-            qrCodeBase64: null,
-            expiresAt: null,
-            fbEventId: reusableByIntent.order?.metaEventId || null,
-          },
-          { status: 200 },
-        )
-      }
+    // -------------------------------------------------
+    // (SEM DEDUPE) - LOG INCOMING (ajuda debug)
+    // -------------------------------------------------
+    if (!isProduction) {
+      console.log("[pix] incoming:", {
+        requestId,
+        createdFrom,
+        isUpsell,
+        upsellSource,
+        baseOrderId,
+        providedOrderId,
+        amountInCents,
+        effectiveQty,
+        cpf: documentNumber ? "***" + documentNumber.slice(-4) : null,
+      })
     }
 
     // -------------------------------------------------
-    // MAIN: já pago, se o front estiver tentando pagar um pedido específico
+    // MAIN: se vier providedOrderId, tentamos pagar ESSE pedido
+    // - se já estiver pago: retorna ok
+    // - se estiver pending e for do user: cria TX nova nesse order
     // -------------------------------------------------
     if (!isUpsell && providedOrderId) {
-      const paidSameOrder = await prisma.order.findFirst({
-        where: {
-          userId: user.id,
-          status: "paid",
-          id: providedOrderId,
-          createdAt: { gte: since },
-        },
-        orderBy: { createdAt: "desc" },
+      const existingOrder = await prisma.order.findFirst({
+        where: { id: providedOrderId, userId: user.id },
       })
 
-      if (paidSameOrder) {
+      if (!existingOrder) {
+        return NextResponse.json({ ok: false, error: "Pedido não encontrado" }, { status: 404 })
+      }
+
+      if (existingOrder.status === "paid") {
         return NextResponse.json(
           {
             ok: true,
             alreadyPaid: true,
             status: "paid",
-            orderId: paidSameOrder.id,
-            fbEventId: paidSameOrder.metaEventId || null,
+            orderId: existingOrder.id,
+            fbEventId: existingOrder.metaEventId || null,
           },
           { status: 200 },
         )
       }
-    }
 
-    // -------------------------------------------------
-    // REUSO pending:
-    // - MAIN: pode reutilizar pending recente (refresh)
-    // - UPSELL: por padrão NÃO reutiliza. Só se allowUpsellReuse=true
-    // -------------------------------------------------
-    if (!isUpsell || allowUpsellReuse) {
-      const baseNeedle = isUpsell && baseOrderId ? `"baseOrderId":"${baseOrderId}"` : null
+      // ⚠️ mantém coerência do pedido existente:
+      // se quiser permitir “pagar com outro valor”, aí teria que mudar regra. Aqui mantém seguro:
+      if (Number(existingOrder.amount || 0) !== amountInCents / 100) {
+        return NextResponse.json(
+          { ok: false, error: "Valor não confere com o pedido. Gere um novo pagamento." },
+          { status: 400 },
+        )
+      }
 
-      const recentPending = await prisma.order.findFirst({
-        where: {
-          userId: user.id,
-          status: "pending",
-          amount: amountInCents / 100,
-          quantity: effectiveQty,
-          createdAt: { gte: since },
-          ...(isUpsell && baseNeedle
-            ? { transactions: { some: { meta: { contains: baseNeedle } } } }
-            : {}),
-        },
-        orderBy: { createdAt: "desc" },
-        include: { transactions: { orderBy: { createdAt: "desc" } } },
-      })
+      const fbEventId = existingOrder.metaEventId || crypto.randomUUID()
 
-      if (recentPending) {
-        const existingTx = recentPending.transactions?.[0] || null
-
-        if (canReuseExistingTx(existingTx)) {
-          return NextResponse.json(
-            {
-              ok: true,
-              reused: true,
-              orderId: recentPending.id,
-              transactionId: existingTx.id,
-              gatewayId: existingTx.gatewayId || null,
-              pixCopiaECola: existingTx.pixCopiaCola,
-              qrCodeBase64: null,
-              expiresAt: null,
-              fbEventId: recentPending.metaEventId || null,
+      let resp: any
+      try {
+        resp = await createPixWithRetry(
+          {
+            amount: amountInCents,
+            customer: {
+              name: fullName || "Cliente",
+              email: email || "cliente@example.com",
+              phone,
+              document: { type: "CPF", number: documentNumber },
             },
-            { status: 200 },
-          )
-        }
-
-        const fbEventId = recentPending.metaEventId || crypto.randomUUID()
-
-        let resp: any
-        try {
-          resp = await createPixWithRetry(
-            {
-              amount: amountInCents,
-              customer: {
-                name: fullName || "Cliente",
-                email: email || "cliente@example.com",
-                phone,
-                document: { type: "CPF", number: documentNumber },
+            items: [
+              {
+                title: `${effectiveQty} números`,
+                quantity: 1,
+                tangible: false,
+                unitPrice: amountInCents,
+                externalRef: existingOrder.id,
               },
-              items: [
-                {
-                  title: `${effectiveQty} números`,
-                  quantity: 1,
-                  tangible: false,
-                  unitPrice: amountInCents,
-                  externalRef: recentPending.id,
-                },
-              ],
-              expiresInDays: 1,
-              traceable: true,
-            },
-            { requestId, orderId: recentPending.id, isUpsell },
-          )
-        } catch (e: any) {
-          await registerFailedTransaction({
-            orderId: recentPending.id,
-            amountInCents,
-            createdFrom,
-            intentKey,
-            requestId,
-            fbp,
-            fbc,
-            clientIpAddress,
-            userAgent,
-            baseOrderId: isUpsell ? baseOrderId : null,
-            providedOrderId: !isUpsell ? providedOrderId : null,
-            stage: "recreate_pending_provider_error",
-            err: e,
-          })
-
-          const c = classifyProviderError(e)
-          return pixUnavailableResponse({
-            stage: "recreate_pending_provider_error",
-            orderId: recentPending.id,
-            requestId,
-            provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
-          })
-        }
-
-        const pixCopiaECola = resolvePixCopiaECola(resp)
-        const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
-        const expiresAt = (resp as any)?.expiresAt ?? null
-        const raw = (resp as any)?.raw
-
-        if (!pixCopiaECola) {
-          await registerFailedTransaction({
-            orderId: recentPending.id,
-            amountInCents,
-            createdFrom,
-            intentKey,
-            requestId,
-            fbp,
-            fbc,
-            clientIpAddress,
-            userAgent,
-            baseOrderId: isUpsell ? baseOrderId : null,
-            providedOrderId: !isUpsell ? providedOrderId : null,
-            stage: "recreate_pending_missing_copia",
-            err: new Error("PIX sem copia e cola (parser)"),
-          })
-
-          // ✅ log mínimo em prod (ajuda achar o campo real do MWBank)
-          console.error("[pix] missing copia (pending recreate):", {
-            requestId,
-            orderId: recentPending.id,
-            isUpsell,
-            upsellSource,
-            keys: raw ? Object.keys(raw).slice(0, 40) : null,
-          })
-
-          return pixUnavailableResponse({
-            stage: "recreate_pending_missing_copia",
-            orderId: recentPending.id,
-            requestId,
-            isUpsell,
-            upsellSource,
-            gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
-          })
-        }
-
-        const gatewayId = resolveGatewayId(resp)
-
-        const meta = buildMetaString({
+            ],
+            expiresInDays: 1,
+            traceable: true,
+          },
+          { requestId, orderId: existingOrder.id, isUpsell: false },
+        )
+      } catch (e: any) {
+        await registerFailedTransaction({
+          orderId: existingOrder.id,
+          amountInCents,
+          createdFrom,
+          requestId,
           fbp,
           fbc,
           clientIpAddress,
           userAgent,
-          createdFrom,
-          intentKey,
-          baseOrderId: isUpsell ? baseOrderId : null,
-          providedOrderId: !isUpsell ? providedOrderId : null,
+          baseOrderId: null,
+          providedOrderId,
+          stage: "pay_existing_order_provider_error",
+          err: e,
+        })
+
+        const c = classifyProviderError(e)
+        return pixUnavailableResponse({
+          stage: "pay_existing_order_provider_error",
           requestId,
-          provider: {
-            id: gatewayId || null,
-            gatewayId: gatewayId || null,
-            externalRef: recentPending.id,
-          },
-          debug: { upsellSource },
+          orderId: existingOrder.id,
+          provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
         })
-
-        const tx = await prisma.transaction.create({
-          data: {
-            orderId: recentPending.id,
-            value: amountInCents / 100,
-            status: "pending",
-            gatewayId: gatewayId || null,
-            pixCopiaCola: pixCopiaECola,
-            meta,
-          },
-        })
-
-        return NextResponse.json(
-          {
-            ok: true,
-            reused: true,
-            orderId: recentPending.id,
-            transactionId: tx.id,
-            gatewayId: gatewayId || null,
-            pixCopiaECola,
-            qrCodeBase64,
-            expiresAt,
-            fbEventId,
-          },
-          { status: 200 },
-        )
       }
+
+      const pixCopiaECola = resolvePixCopiaECola(resp)
+      const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
+      const expiresAt = (resp as any)?.expiresAt ?? null
+      const raw = (resp as any)?.raw
+
+      if (!pixCopiaECola) {
+        await registerFailedTransaction({
+          orderId: existingOrder.id,
+          amountInCents,
+          createdFrom,
+          requestId,
+          fbp,
+          fbc,
+          clientIpAddress,
+          userAgent,
+          baseOrderId: null,
+          providedOrderId,
+          stage: "pay_existing_order_missing_copia",
+          err: new Error("PIX sem copia e cola"),
+        })
+
+        return pixUnavailableResponse({
+          stage: "pay_existing_order_missing_copia",
+          orderId: existingOrder.id,
+          requestId,
+          gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+          raw: isProduction ? undefined : raw,
+        })
+      }
+
+      const gatewayId = resolveGatewayId(resp)
+
+      const meta = buildMetaString({
+        fbp,
+        fbc,
+        clientIpAddress,
+        userAgent,
+        createdFrom: "main",
+        requestId,
+        baseOrderId: null,
+        providedOrderId,
+        provider: {
+          id: gatewayId || null,
+          gatewayId: gatewayId || null,
+          externalRef: existingOrder.id,
+        },
+      })
+
+      const tx = await prisma.transaction.create({
+        data: {
+          orderId: existingOrder.id,
+          value: amountInCents / 100,
+          status: "pending",
+          gatewayId: gatewayId || null,
+          pixCopiaCola: pixCopiaECola,
+          meta,
+        },
+      })
+
+      return NextResponse.json(
+        {
+          ok: true,
+          orderId: existingOrder.id,
+          transactionId: tx.id,
+          gatewayId: gatewayId || null,
+          pixCopiaECola,
+          qrCodeBase64,
+          expiresAt,
+          fbEventId,
+        },
+        { status: 200 },
+      )
     }
 
     // -------------------------------------------------
-    // NOVO PEDIDO (MAIN e UPSELL)
+    // (SEM DEDUPE) - SEMPRE cria NOVO pedido:
+    // - MAIN normal: cria order + tx
+    // - UPSELL: cria order + tx (meta carrega baseOrderId)
     // -------------------------------------------------
     const fbEventId = crypto.randomUUID()
 
@@ -798,14 +638,13 @@ export async function POST(req: Request) {
         orderId: order.id,
         amountInCents,
         createdFrom,
-        intentKey,
         requestId,
         fbp,
         fbc,
         clientIpAddress,
         userAgent,
         baseOrderId: isUpsell ? baseOrderId : null,
-        providedOrderId: !isUpsell ? providedOrderId : null,
+        providedOrderId: null,
         stage: "create_new_provider_error",
         err: e,
       })
@@ -829,25 +668,15 @@ export async function POST(req: Request) {
         orderId: order.id,
         amountInCents,
         createdFrom,
-        intentKey,
         requestId,
         fbp,
         fbc,
         clientIpAddress,
         userAgent,
         baseOrderId: isUpsell ? baseOrderId : null,
-        providedOrderId: !isUpsell ? providedOrderId : null,
+        providedOrderId: null,
         stage: "create_new_missing_copia",
-        err: new Error("PIX sem copia e cola (parser)"),
-      })
-
-      console.error("[pix] missing copia (new order):", {
-        requestId,
-        orderId: order.id,
-        isUpsell,
-        upsellSource,
-        gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
-        rawKeys: raw ? Object.keys(raw).slice(0, 40) : null,
+        err: new Error("PIX sem copia e cola"),
       })
 
       return pixUnavailableResponse({
@@ -857,6 +686,7 @@ export async function POST(req: Request) {
         isUpsell,
         upsellSource,
         gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+        raw: isProduction ? undefined : raw,
       })
     }
 
@@ -868,10 +698,9 @@ export async function POST(req: Request) {
       clientIpAddress,
       userAgent,
       createdFrom,
-      intentKey,
-      baseOrderId: isUpsell ? baseOrderId : null,
-      providedOrderId: !isUpsell ? providedOrderId : null,
       requestId,
+      baseOrderId: isUpsell ? baseOrderId : null,
+      providedOrderId: null,
       provider: {
         id: gatewayId || null,
         gatewayId: gatewayId || null,
