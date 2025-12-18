@@ -81,6 +81,30 @@ function pixUnavailableResponse(extra?: any) {
   )
 }
 
+// ✅ classifica erro do provedor pra não mascarar "Unauthorized"
+function classifyProviderError(err: any) {
+  const msg = String(err?.message || err || "").toLowerCase()
+
+  const isUnauthorized =
+    msg.includes("unauthor") ||
+    msg.includes("auth falhou") ||
+    msg.includes("forbidden") ||
+    msg.includes("invalid token") ||
+    msg.includes("token") && msg.includes("fail")
+
+  const isTimeout =
+    msg.includes("aborted") ||
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("etimedout")
+
+  return {
+    isUnauthorized,
+    isTimeout,
+    rawMessage: String(err?.message || err || ""),
+  }
+}
+
 // ✅ MW: garante que o gatewayId usado no banco seja SEMPRE o txid retornado
 function resolveGatewayId(resp: any) {
   const txid =
@@ -137,13 +161,16 @@ function canReuseExistingTx(existingTx: any) {
 }
 
 export async function POST(req: Request) {
+  // id por request pra rastrear em log (sem expor dados)
+  const requestId = crypto.randomUUID()
+
   try {
     const body = await req.json()
 
     if (!isProduction) {
       console.log("REQUEST /api/pagamento/pix BODY:", body)
     } else {
-      console.log("REQUEST /api/pagamento/pix RECEIVED")
+      console.log("REQUEST /api/pagamento/pix RECEIVED", { requestId })
     }
 
     const headers = req.headers
@@ -154,8 +181,13 @@ export async function POST(req: Request) {
     const fbp = cookies["_fbp"] || undefined
     const fbc = cookies["_fbc"] || undefined
 
-    // ⚠️ upsell vem do front. Aceita ambos os formatos pra não quebrar.
-    const isUpsell = body?.upsell === true || body?.mode === "upsell" || body?.createdFrom === "upsell"
+    // ✅ UPSSELL: aceitar TODOS os formatos (front manda isUpsell/baseOrderId etc)
+    const isUpsell =
+      body?.isUpsell === true ||
+      body?.upsell === true ||
+      body?.mode === "upsell" ||
+      body?.createdFrom === "upsell" ||
+      String(body?.upsell || "") === "1"
 
     // -------------------------------------------------
     // VALOR TOTAL
@@ -185,26 +217,19 @@ export async function POST(req: Request) {
     const numbersLen = Array.isArray(body?.numbers) ? body.numbers.length : 0
 
     if (isUpsell) {
-      // Upsell: usa quantity/numbers como fonte principal (com sanidade)
       if (numbersLen > 0) effectiveQty = numbersLen
       else if (bodyQty > 0) effectiveQty = bodyQty
       else effectiveQty = 0
 
       if (!effectiveQty || effectiveQty <= 0) {
-        return NextResponse.json(
-          { ok: false, error: "Quantidade inválida para upsell." },
-          { status: 400 },
-        )
+        return NextResponse.json({ ok: false, error: "Quantidade inválida para upsell." }, { status: 400 })
       }
     } else {
       const quantityFromAmount =
         UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(amountInCents / UNIT_PRICE_CENTS)) : 0
 
       if (!quantityFromAmount || quantityFromAmount <= 0) {
-        return NextResponse.json(
-          { ok: false, error: "Valor insuficiente para gerar números válidos." },
-          { status: 400 },
-        )
+        return NextResponse.json({ ok: false, error: "Valor insuficiente para gerar números válidos." }, { status: 400 })
       }
 
       effectiveQty = quantityFromAmount
@@ -353,26 +378,45 @@ export async function POST(req: Request) {
 
       const fbEventId = recentPending.metaEventId || crypto.randomUUID()
 
-      const resp = await createPixTransaction({
-        amount: amountInCents,
-        customer: {
-          name: fullName || "Cliente",
-          email: email || "cliente@example.com",
-          phone,
-          document: { type: "CPF", number: documentNumber },
-        },
-        items: [
-          {
-            title: `${effectiveQty} números`,
-            quantity: 1,
-            tangible: false,
-            unitPrice: amountInCents,
-            externalRef: recentPending.id,
+      let resp: any
+      try {
+        resp = await createPixTransaction({
+          amount: amountInCents,
+          customer: {
+            name: fullName || "Cliente",
+            email: email || "cliente@example.com",
+            phone,
+            document: { type: "CPF", number: documentNumber },
           },
-        ],
-        expiresInDays: 1,
-        traceable: true,
-      })
+          items: [
+            {
+              title: `${effectiveQty} números`,
+              quantity: 1,
+              tangible: false,
+              unitPrice: amountInCents,
+              externalRef: recentPending.id,
+            },
+          ],
+          expiresInDays: 1,
+          traceable: true,
+        })
+      } catch (e: any) {
+        const c = classifyProviderError(e)
+        console.error("ERRO MWBANK createPixTransaction (recreate_pending):", {
+          requestId,
+          orderId: recentPending.id,
+          isUpsell,
+          amount: amountInCents / 100,
+          providerError: c.rawMessage?.slice(0, 500),
+        })
+        // ✅ devolve 503 pro front em vez de 500 genérico
+        return pixUnavailableResponse({
+          stage: "recreate_pending_provider_error",
+          orderId: recentPending.id,
+          requestId,
+          provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+        })
+      }
 
       const pixCopiaECola = resolvePixCopiaECola(resp)
       const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
@@ -384,6 +428,7 @@ export async function POST(req: Request) {
           stage: "recreate_pending",
           orderId: recentPending.id,
           gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+          requestId,
           raw: isProduction ? undefined : raw,
         })
       }
@@ -393,6 +438,7 @@ export async function POST(req: Request) {
         return pixUnavailableResponse({
           stage: "recreate_pending_missing_txid",
           orderId: recentPending.id,
+          requestId,
           raw: isProduction ? undefined : raw,
         })
       }
@@ -468,26 +514,44 @@ export async function POST(req: Request) {
       })
     }
 
-    const resp = await createPixTransaction({
-      amount: amountInCents,
-      customer: {
-        name: fullName || "Cliente",
-        email: email || "cliente@example.com",
-        phone,
-        document: { type: "CPF", number: documentNumber },
-      },
-      items: [
-        {
-          title: `${effectiveQty} números`,
-          quantity: 1,
-          tangible: false,
-          unitPrice: amountInCents,
-          externalRef: order.id,
+    let resp: any
+    try {
+      resp = await createPixTransaction({
+        amount: amountInCents,
+        customer: {
+          name: fullName || "Cliente",
+          email: email || "cliente@example.com",
+          phone,
+          document: { type: "CPF", number: documentNumber },
         },
-      ],
-      expiresInDays: 1,
-      traceable: true,
-    })
+        items: [
+          {
+            title: `${effectiveQty} números`,
+            quantity: 1,
+            tangible: false,
+            unitPrice: amountInCents,
+            externalRef: order.id,
+          },
+        ],
+        expiresInDays: 1,
+        traceable: true,
+      })
+    } catch (e: any) {
+      const c = classifyProviderError(e)
+      console.error("ERRO MWBANK createPixTransaction (create_new):", {
+        requestId,
+        orderId: order.id,
+        isUpsell,
+        amount: amountInCents / 100,
+        providerError: c.rawMessage?.slice(0, 500),
+      })
+      return pixUnavailableResponse({
+        stage: "create_new_provider_error",
+        orderId: order.id,
+        requestId,
+        provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+      })
+    }
 
     const pixCopiaECola = resolvePixCopiaECola(resp)
     const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
@@ -499,6 +563,7 @@ export async function POST(req: Request) {
         stage: "create_new",
         orderId: order.id,
         gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+        requestId,
         raw: isProduction ? undefined : raw,
       })
     }
@@ -508,6 +573,7 @@ export async function POST(req: Request) {
       return pixUnavailableResponse({
         stage: "create_new_missing_txid",
         orderId: order.id,
+        requestId,
         raw: isProduction ? undefined : raw,
       })
     }
@@ -555,8 +621,28 @@ export async function POST(req: Request) {
       },
       { status: 200 },
     )
-  } catch (err) {
-    console.error("ERRO /api/pagamento/pix:", err)
-    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
+  } catch (err: any) {
+    const c = classifyProviderError(err)
+
+    console.error("ERRO /api/pagamento/pix:", {
+      requestId,
+      message: String(err?.message || err || "").slice(0, 800),
+      provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+    })
+
+    // ✅ Se for erro do MWBank/auth/etc: devolve 503 (front mostra card “tente novamente”)
+    if (c.isUnauthorized || c.isTimeout) {
+      return pixUnavailableResponse({
+        stage: "catch_provider_error",
+        requestId,
+        provider: c.isUnauthorized ? "unauthorized" : "timeout",
+      })
+    }
+
+    // Erro interno real
+    return NextResponse.json(
+      { ok: false, error: "Erro ao processar pagamento" },
+      { status: 500 },
+    )
   }
 }
