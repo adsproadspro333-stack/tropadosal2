@@ -60,6 +60,7 @@ function buildMetaString(input: {
       ? {
           provider: {
             ...(input.provider.id ? { id: input.provider.id } : {}),
+            // ✅ gatewayId agora é opcional
             ...(input.provider.gatewayId ? { gatewayId: input.provider.gatewayId } : {}),
             ...(input.provider.externalRef ? { externalRef: input.provider.externalRef } : {}),
           },
@@ -90,7 +91,7 @@ function classifyProviderError(err: any) {
     msg.includes("auth falhou") ||
     msg.includes("forbidden") ||
     msg.includes("invalid token") ||
-    msg.includes("token") && msg.includes("fail")
+    (msg.includes("token") && msg.includes("fail"))
 
   const isTimeout =
     msg.includes("aborted") ||
@@ -105,7 +106,7 @@ function classifyProviderError(err: any) {
   }
 }
 
-// ✅ MW: garante que o gatewayId usado no banco seja SEMPRE o txid retornado
+// ✅ MW: tenta descobrir gatewayId/txid se vier
 function resolveGatewayId(resp: any) {
   const txid =
     resp?.gatewayId ||
@@ -142,21 +143,12 @@ function resolvePixCopiaECola(resp: any) {
   return s || null
 }
 
-// 🔒 Só reutiliza se houver PIX + gatewayId válido (evita “pix fantasma”)
+// ✅ REUSO: agora só precisa do Copia e Cola.
+// (REMOVIDO: exigência de gatewayId/txid — isso era o "pix fantasma")
 function canReuseExistingTx(existingTx: any) {
   if (!existingTx) return false
   const pix = String(existingTx.pixCopiaCola || "").trim()
-  const gw = String(existingTx.gatewayId || "").trim()
-
   if (!pix) return false
-  if (!gw) return false
-
-  // heurística segura: gatewayId não pode ser igual ao id do registro (uuid)
-  if (existingTx.id && String(existingTx.id).trim() === gw) return false
-
-  // txid costuma ter tamanho razoável
-  if (gw.length < 8) return false
-
   return true
 }
 
@@ -209,8 +201,6 @@ export async function POST(req: Request) {
     // -------------------------------------------------
     // QTD (ANTI-BURLO)
     // -------------------------------------------------
-    // ✅ MAIN: valida por preço unitário (linear)
-    // ✅ UPSELL: NÃO pode validar por UNIT_PRICE_CENTS, porque é pacote promocional (não linear)
     let effectiveQty = 0
 
     const bodyQty = Math.round(Number(body?.quantity || 0))
@@ -332,7 +322,7 @@ export async function POST(req: Request) {
     })
 
     // -------------------------------------------------
-    // REUSO: se tiver um pending com pix + gatewayId válido -> reutiliza
+    // REUSO: se tiver pending com Copia e Cola -> reutiliza
     // -------------------------------------------------
     if (recentPending) {
       const existingTx = recentPending.transactions?.[0] || null
@@ -342,7 +332,7 @@ export async function POST(req: Request) {
           console.log("[pix] Reusando tx existente (OK):", {
             orderId: recentPending.id,
             txDbId: existingTx.id,
-            gatewayId: existingTx.gatewayId,
+            gatewayId: existingTx.gatewayId || null,
           })
         }
 
@@ -352,12 +342,11 @@ export async function POST(req: Request) {
             reused: true,
             orderId: recentPending.id,
 
-            // ✅ PARA O FRONT: transactionId = gatewayId (txid real)
-            transactionId: existingTx.gatewayId,
-            gatewayId: existingTx.gatewayId,
+            // ✅ PARA O FRONT: transactionId = DB ID (prisma.transaction.id)
+            transactionId: existingTx.id,
 
-            // ✅ opcional/debug
-            dbTransactionId: existingTx.id,
+            // ✅ opcional
+            gatewayId: existingTx.gatewayId || null,
 
             pixCopiaECola: existingTx.pixCopiaCola,
             qrCodeBase64: null,
@@ -366,14 +355,6 @@ export async function POST(req: Request) {
           },
           { status: 200 },
         )
-      }
-
-      if (existingTx?.pixCopiaCola && !isProduction) {
-        console.warn("[pix] NÃO reutilizando tx antigo (suspeito/sem gatewayId). Vou regenerar:", {
-          orderId: recentPending.id,
-          txDbId: existingTx.id,
-          gatewayId: existingTx.gatewayId || null,
-        })
       }
 
       const fbEventId = recentPending.metaEventId || crypto.randomUUID()
@@ -409,7 +390,6 @@ export async function POST(req: Request) {
           amount: amountInCents / 100,
           providerError: c.rawMessage?.slice(0, 500),
         })
-        // ✅ devolve 503 pro front em vez de 500 genérico
         return pixUnavailableResponse({
           stage: "recreate_pending_provider_error",
           orderId: recentPending.id,
@@ -423,9 +403,10 @@ export async function POST(req: Request) {
       const expiresAt = (resp as any)?.expiresAt ?? null
       const raw = (resp as any)?.raw
 
+      // ✅ Se não veio Copia e Cola, aí sim é "indisponível"
       if (!pixCopiaECola) {
         return pixUnavailableResponse({
-          stage: "recreate_pending",
+          stage: "recreate_pending_missing_copia",
           orderId: recentPending.id,
           gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
           requestId,
@@ -433,15 +414,8 @@ export async function POST(req: Request) {
         })
       }
 
+      // ✅ gatewayId/txid agora é opcional (não bloqueia)
       const gatewayId = resolveGatewayId(resp)
-      if (!gatewayId) {
-        return pixUnavailableResponse({
-          stage: "recreate_pending_missing_txid",
-          orderId: recentPending.id,
-          requestId,
-          raw: isProduction ? undefined : raw,
-        })
-      }
 
       const meta = buildMetaString({
         fbp,
@@ -450,8 +424,8 @@ export async function POST(req: Request) {
         userAgent,
         createdFrom: isUpsell ? "upsell" : "main",
         provider: {
-          id: gatewayId,
-          gatewayId,
+          id: gatewayId || null,
+          gatewayId: gatewayId || null,
           externalRef: recentPending.id,
         },
       })
@@ -461,7 +435,7 @@ export async function POST(req: Request) {
           orderId: recentPending.id,
           value: amountInCents / 100,
           status: "pending",
-          gatewayId,
+          gatewayId: gatewayId || null,
           pixCopiaCola: pixCopiaECola,
           meta,
         },
@@ -473,12 +447,11 @@ export async function POST(req: Request) {
           reused: true,
           orderId: recentPending.id,
 
-          // ✅ PARA O FRONT
-          transactionId: gatewayId,
-          gatewayId,
+          // ✅ PARA O FRONT: DB ID sempre
+          transactionId: tx.id,
 
-          // ✅ debug
-          dbTransactionId: tx.id,
+          // ✅ opcional
+          gatewayId: gatewayId || null,
 
           pixCopiaECola,
           qrCodeBase64,
@@ -560,7 +533,7 @@ export async function POST(req: Request) {
 
     if (!pixCopiaECola) {
       return pixUnavailableResponse({
-        stage: "create_new",
+        stage: "create_new_missing_copia",
         orderId: order.id,
         gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
         requestId,
@@ -568,15 +541,8 @@ export async function POST(req: Request) {
       })
     }
 
+    // ✅ gatewayId opcional
     const gatewayId = resolveGatewayId(resp)
-    if (!gatewayId) {
-      return pixUnavailableResponse({
-        stage: "create_new_missing_txid",
-        orderId: order.id,
-        requestId,
-        raw: isProduction ? undefined : raw,
-      })
-    }
 
     const meta = buildMetaString({
       fbp,
@@ -585,8 +551,8 @@ export async function POST(req: Request) {
       userAgent,
       createdFrom: isUpsell ? "upsell" : "main",
       provider: {
-        id: gatewayId,
-        gatewayId,
+        id: gatewayId || null,
+        gatewayId: gatewayId || null,
         externalRef: order.id,
       },
     })
@@ -596,7 +562,7 @@ export async function POST(req: Request) {
         orderId: order.id,
         value: amountInCents / 100,
         status: "pending",
-        gatewayId,
+        gatewayId: gatewayId || null,
         pixCopiaCola: pixCopiaECola,
         meta,
       },
@@ -607,12 +573,11 @@ export async function POST(req: Request) {
         ok: true,
         orderId: order.id,
 
-        // ✅ PARA O FRONT
-        transactionId: gatewayId,
-        gatewayId,
+        // ✅ PARA O FRONT: DB ID sempre (isso destrava seu /pagamento/page.tsx)
+        transactionId: tx.id,
 
-        // ✅ debug
-        dbTransactionId: tx.id,
+        // ✅ opcional
+        gatewayId: gatewayId || null,
 
         pixCopiaECola,
         qrCodeBase64,
@@ -639,7 +604,6 @@ export async function POST(req: Request) {
       })
     }
 
-    // Erro interno real
     return NextResponse.json(
       { ok: false, error: "Erro ao processar pagamento" },
       { status: 500 },
