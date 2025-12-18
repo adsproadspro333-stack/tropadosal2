@@ -91,7 +91,7 @@ function DashLoginInner() {
             </Typography>
 
             <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.9rem" }}>
-              Área restrita. Use o usuário/senha definidos nas variáveis do Railway.
+              Área restrita. Use o usuário/senha definidos.
             </Typography>
 
             {err && <Alert severity="error">{err}</Alert>}

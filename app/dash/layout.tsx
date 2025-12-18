@@ -73,7 +73,7 @@ export default function DashLayout({ children }: { children: React.ReactNode }) 
                 fontWeight: 800,
               }}
             >
-              Railway • Prisma • MWBank
+              Privado
             </Box>
           </Box>
         </Container>
