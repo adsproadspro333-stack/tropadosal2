@@ -688,33 +688,59 @@ if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
         const raw = (resp as any)?.raw
 
         if (!pixCopiaECola) {
-          await registerFailedTransaction({
-            orderId: recentPending.id,
-            amountInCents,
-            createdFrom,
-            intentKey,
-            requestId,
-            fbp,
-            fbc,
-            clientIpAddress,
-            userAgent,
-            baseOrderId: isUpsell ? baseOrderId : null,
-            providedOrderId: !isUpsell ? providedOrderId : null,
-            stage: "recreate_pending_missing_copia",
-            err: new Error("PIX sem copia e cola"),
-          })
+  // ✅ MW criou a transação mas não devolveu o payload ainda
+  // Isso é NORMAL no MWBank (PIX assíncrono)
 
-          return pixUnavailableResponse({
-            requestId,
-            extra: {
-              stage: "recreate_pending_missing_copia",
-              orderId: recentPending.id,
-              isUpsell,
-              upsellSource,
-              gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
-            },
-          })
-        }
+  const gatewayId = resolveGatewayId(resp)
+
+  const meta = buildMetaString({
+    fbp,
+    fbc,
+    clientIpAddress,
+    userAgent,
+    createdFrom,
+    intentKey,
+    baseOrderId: isUpsell ? baseOrderId : null,
+    providedOrderId: !isUpsell ? providedOrderId : null,
+    requestId,
+    provider: {
+      id: gatewayId || null,
+      gatewayId: gatewayId || null,
+      externalRef: order.id,
+    },
+    debug: {
+      note: "PIX criado sem copia-e-cola (async)",
+      upsellSource,
+    },
+  })
+
+  const tx = await prisma.transaction.create({
+    data: {
+      orderId: order.id,
+      value: amountInCents / 100,
+      status: "pending",
+      gatewayId: gatewayId || null,
+      pixCopiaCola: "", // será preenchido depois se quiser
+      meta,
+    },
+  })
+
+  return NextResponse.json(
+    {
+      ok: true,
+      pending: true,
+      orderId: order.id,
+      transactionId: tx.id,
+      gatewayId: gatewayId,
+      pixCopiaECola: null,
+      qrCodeBase64: null,
+      expiresAt: null,
+      fbEventId,
+      message: "PIX gerado, aguardando confirmação",
+    },
+    { status: 200 },
+  )
+}
 
         const gatewayId = resolveGatewayId(resp)
 
