@@ -48,6 +48,12 @@ function normalizeDigits(v: any) {
   return String(v || "").replace(/\D/g, "")
 }
 
+function maskCpfLast4(cpf: string) {
+  const d = normalizeDigits(cpf)
+  if (!d) return "unknown"
+  return d.length >= 4 ? `***${d.slice(-4)}` : "***"
+}
+
 function buildIntentKey(input: {
   createdFrom: "main" | "upsell"
   cpf: string
@@ -113,12 +119,23 @@ function buildMetaString(input: {
   return JSON.stringify(obj)
 }
 
-function pixUnavailableResponse(extra?: any) {
-  if (!isProduction) {
-    console.error("[pix] PIX indisponível agora:", extra)
-  }
+function pixUnavailableResponse(params: {
+  requestId: string
+  extra?: any
+}) {
+  const { requestId, extra } = params
+  // ✅ loga também em prod (sem dados sensíveis)
+  console.error("[pix] PIX indisponível agora:", {
+    requestId,
+    ...(extra ? { extra } : {}),
+  })
+
   return NextResponse.json(
-    { ok: false, error: "PIX indisponível no momento. Tente novamente em instantes." },
+    {
+      ok: false,
+      error: "PIX indisponível no momento. Tente novamente em instantes.",
+      requestId, // ✅ ajuda debug no front/console
+    },
     { status: 503 },
   )
 }
@@ -208,7 +225,7 @@ async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: string; isUpsell: boolean }) {
+async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: string; isUpsell: boolean; upsellSource?: string }) {
   const maxAttempts = 2
   let lastErr: any = null
 
@@ -224,9 +241,10 @@ async function createPixWithRetry(args: any, ctx: { requestId: string; orderId: 
         requestId: ctx.requestId,
         orderId: ctx.orderId,
         isUpsell: ctx.isUpsell,
+        upsellSource: ctx.upsellSource || "",
         attempt,
         provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
-        message: c.rawMessage?.slice(0, 400),
+        message: c.rawMessage?.slice(0, 500),
       })
 
       if (c.isUnauthorized) break
@@ -344,8 +362,7 @@ export async function POST(req: Request) {
     // ✅ IMPORTANTÍSSIMO:
     // - no upsell do "Minhas Compras", geralmente vem só orderId => usamos isso como baseOrderId
     const baseOrderIdStr = String(baseOrderIdRaw || "").trim() || null
-    const baseOrderId =
-      isUpsell ? (baseOrderIdStr || providedOrderIdStr) : baseOrderIdStr
+    const baseOrderId = isUpsell ? (baseOrderIdStr || providedOrderIdStr) : baseOrderIdStr
 
     // para main pode vir orderId amarrado pela URL
     const providedOrderId = !isUpsell ? providedOrderIdStr : null
@@ -425,6 +442,19 @@ export async function POST(req: Request) {
     if (!documentNumber) {
       return NextResponse.json({ ok: false, error: "CPF obrigatório" }, { status: 400 })
     }
+
+    // ✅ LOG INCOMING (PROD OK, SEM SENSÍVEIS)
+    console.log("[pix] incoming:", {
+      requestId,
+      createdFrom,
+      isUpsell,
+      upsellSource,
+      baseOrderId: baseOrderId || null,
+      providedOrderId: providedOrderId || null,
+      amountInCents,
+      effectiveQty,
+      cpf: maskCpfLast4(documentNumber),
+    })
 
     // -------------------------------------------------
     // USER (CPF DOMINANTE)
@@ -612,7 +642,7 @@ export async function POST(req: Request) {
               expiresInDays: 1,
               traceable: true,
             },
-            { requestId, orderId: recentPending.id, isUpsell },
+            { requestId, orderId: recentPending.id, isUpsell, upsellSource },
           )
         } catch (e: any) {
           await registerFailedTransaction({
@@ -633,10 +663,15 @@ export async function POST(req: Request) {
 
           const c = classifyProviderError(e)
           return pixUnavailableResponse({
-            stage: "recreate_pending_provider_error",
-            orderId: recentPending.id,
             requestId,
-            provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+            extra: {
+              stage: "recreate_pending_provider_error",
+              orderId: recentPending.id,
+              isUpsell,
+              upsellSource,
+              provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+              message: c.rawMessage?.slice(0, 300),
+            },
           })
         }
 
@@ -663,11 +698,14 @@ export async function POST(req: Request) {
           })
 
           return pixUnavailableResponse({
-            stage: "recreate_pending_missing_copia",
-            orderId: recentPending.id,
-            gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
             requestId,
-            raw: isProduction ? undefined : raw,
+            extra: {
+              stage: "recreate_pending_missing_copia",
+              orderId: recentPending.id,
+              isUpsell,
+              upsellSource,
+              gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+            },
           })
         }
 
@@ -767,7 +805,7 @@ export async function POST(req: Request) {
           expiresInDays: 1,
           traceable: true,
         },
-        { requestId, orderId: order.id, isUpsell },
+        { requestId, orderId: order.id, isUpsell, upsellSource },
       )
     } catch (e: any) {
       await registerFailedTransaction({
@@ -788,10 +826,15 @@ export async function POST(req: Request) {
 
       const c = classifyProviderError(e)
       return pixUnavailableResponse({
-        stage: "create_new_provider_error",
-        orderId: order.id,
         requestId,
-        provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+        extra: {
+          stage: "create_new_provider_error",
+          orderId: order.id,
+          isUpsell,
+          upsellSource,
+          provider: c.isUnauthorized ? "unauthorized" : c.isTimeout ? "timeout" : "other",
+          message: c.rawMessage?.slice(0, 300),
+        },
       })
     }
 
@@ -818,11 +861,14 @@ export async function POST(req: Request) {
       })
 
       return pixUnavailableResponse({
-        stage: "create_new_missing_copia",
-        orderId: order.id,
-        gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
         requestId,
-        raw: isProduction ? undefined : raw,
+        extra: {
+          stage: "create_new_missing_copia",
+          orderId: order.id,
+          isUpsell,
+          upsellSource,
+          gatewayStatus: raw?.status ?? raw?.data?.status ?? null,
+        },
       })
     }
 
@@ -881,12 +927,18 @@ export async function POST(req: Request) {
 
     if (c.isUnauthorized || c.isTimeout) {
       return pixUnavailableResponse({
-        stage: "catch_provider_error",
         requestId,
-        provider: c.isUnauthorized ? "unauthorized" : "timeout",
+        extra: {
+          stage: "catch_provider_error",
+          provider: c.isUnauthorized ? "unauthorized" : "timeout",
+          message: c.rawMessage?.slice(0, 300),
+        },
       })
     }
 
-    return NextResponse.json({ ok: false, error: "Erro ao processar pagamento" }, { status: 500 })
+    return NextResponse.json(
+      { ok: false, error: "Erro ao processar pagamento", requestId },
+      { status: 500 },
+    )
   }
 }
