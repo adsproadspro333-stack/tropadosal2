@@ -84,6 +84,7 @@ function pixUnavailableResponse(extra?: any) {
 // ✅ MW: garante que o gatewayId usado no banco seja SEMPRE o txid retornado
 function resolveGatewayId(resp: any) {
   const txid =
+    resp?.gatewayId ||
     resp?.transactionId ||
     resp?.txid ||
     resp?.raw?.data?.txid ||
@@ -96,6 +97,27 @@ function resolveGatewayId(resp: any) {
   return s || null
 }
 
+// ✅ resolve Copia e Cola em múltiplos formatos
+function resolvePixCopiaECola(resp: any) {
+  const v =
+    resp?.pixCopiaECola ??
+    resp?.copiaECola ??
+    resp?.copia_e_cola ??
+    resp?.brCode ??
+    resp?.payload ??
+    resp?.pix?.copiaECola ??
+    resp?.pix?.copia_e_cola ??
+    resp?.raw?.data?.pixCopiaECola ??
+    resp?.raw?.data?.copia_e_cola ??
+    resp?.raw?.data?.brCode ??
+    resp?.raw?.pixCopiaECola ??
+    resp?.raw?.copia_e_cola ??
+    null
+
+  const s = String(v || "").trim()
+  return s || null
+}
+
 // 🔒 Só reutiliza se houver PIX + gatewayId válido (evita “pix fantasma”)
 function canReuseExistingTx(existingTx: any) {
   if (!existingTx) return false
@@ -105,7 +127,7 @@ function canReuseExistingTx(existingTx: any) {
   if (!pix) return false
   if (!gw) return false
 
-  // heurística segura: gatewayId não pode ser igual ao id do registro (cuid)
+  // heurística segura: gatewayId não pode ser igual ao id do registro (uuid)
   if (existingTx.id && String(existingTx.id).trim() === gw) return false
 
   // txid costuma ter tamanho razoável
@@ -132,7 +154,8 @@ export async function POST(req: Request) {
     const fbp = cookies["_fbp"] || undefined
     const fbc = cookies["_fbc"] || undefined
 
-    const isUpsell = body?.upsell === true
+    // ⚠️ upsell vem do front. Aceita ambos os formatos pra não quebrar.
+    const isUpsell = body?.upsell === true || body?.mode === "upsell" || body?.createdFrom === "upsell"
 
     // -------------------------------------------------
     // VALOR TOTAL
@@ -149,34 +172,51 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "Valor do pedido inválido" }, { status: 400 })
     }
 
-    // -------------------------------------------------
-    // ANTI-BURLO POR VALOR
-    // -------------------------------------------------
-    const quantityFromAmount =
-      UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(totalInCents / UNIT_PRICE_CENTS)) : 0
-
-    if (!quantityFromAmount || quantityFromAmount <= 0) {
-      return NextResponse.json(
-        { ok: false, error: "Valor insuficiente para gerar números válidos." },
-        { status: 400 },
-      )
-    }
-
-    let effectiveQty = quantityFromAmount
-
-    if (
-      Array.isArray(body.numbers) &&
-      body.numbers.length > 0 &&
-      body.numbers.length <= quantityFromAmount
-    ) {
-      effectiveQty = body.numbers.length
-    }
-
-    if (Number(body?.quantity) > 0 && Number(body.quantity) <= quantityFromAmount) {
-      effectiveQty = Number(body.quantity)
-    }
-
     const amountInCents = Math.round(totalInCents)
+
+    // -------------------------------------------------
+    // QTD (ANTI-BURLO)
+    // -------------------------------------------------
+    // ✅ MAIN: valida por preço unitário (linear)
+    // ✅ UPSELL: NÃO pode validar por UNIT_PRICE_CENTS, porque é pacote promocional (não linear)
+    let effectiveQty = 0
+
+    const bodyQty = Math.round(Number(body?.quantity || 0))
+    const numbersLen = Array.isArray(body?.numbers) ? body.numbers.length : 0
+
+    if (isUpsell) {
+      // Upsell: usa quantity/numbers como fonte principal (com sanidade)
+      if (numbersLen > 0) effectiveQty = numbersLen
+      else if (bodyQty > 0) effectiveQty = bodyQty
+      else effectiveQty = 0
+
+      if (!effectiveQty || effectiveQty <= 0) {
+        return NextResponse.json(
+          { ok: false, error: "Quantidade inválida para upsell." },
+          { status: 400 },
+        )
+      }
+    } else {
+      const quantityFromAmount =
+        UNIT_PRICE_CENTS > 0 ? Math.max(0, Math.floor(amountInCents / UNIT_PRICE_CENTS)) : 0
+
+      if (!quantityFromAmount || quantityFromAmount <= 0) {
+        return NextResponse.json(
+          { ok: false, error: "Valor insuficiente para gerar números válidos." },
+          { status: 400 },
+        )
+      }
+
+      effectiveQty = quantityFromAmount
+
+      if (numbersLen > 0 && numbersLen <= quantityFromAmount) {
+        effectiveQty = numbersLen
+      }
+
+      if (bodyQty > 0 && bodyQty <= quantityFromAmount) {
+        effectiveQty = bodyQty
+      }
+    }
 
     // -------------------------------------------------
     // CLIENTE
@@ -225,32 +265,34 @@ export async function POST(req: Request) {
     if (!user) throw new Error("Usuário não encontrado")
 
     // -------------------------------------------------
-    // IDEMPOTÊNCIA
+    // IDEMPOTÊNCIA (somente MAIN)
     // -------------------------------------------------
     const now = Date.now()
     const since = new Date(now - IDEMPOTENCY_WINDOW_MS)
 
-    const recentPaid = await prisma.order.findFirst({
-      where: {
-        userId: user.id,
-        status: "paid",
-        amount: amountInCents / 100,
-        createdAt: { gte: since },
-      },
-      orderBy: { createdAt: "desc" },
-    })
-
-    if (recentPaid) {
-      return NextResponse.json(
-        {
-          ok: true,
-          alreadyPaid: true,
+    if (!isUpsell) {
+      const recentPaid = await prisma.order.findFirst({
+        where: {
+          userId: user.id,
           status: "paid",
-          orderId: recentPaid.id,
-          fbEventId: recentPaid.metaEventId || null,
+          amount: amountInCents / 100,
+          createdAt: { gte: since },
         },
-        { status: 200 },
-      )
+        orderBy: { createdAt: "desc" },
+      })
+
+      if (recentPaid) {
+        return NextResponse.json(
+          {
+            ok: true,
+            alreadyPaid: true,
+            status: "paid",
+            orderId: recentPaid.id,
+            fbEventId: recentPaid.metaEventId || null,
+          },
+          { status: 200 },
+        )
+      }
     }
 
     const recentPending = await prisma.order.findFirst({
@@ -266,7 +308,6 @@ export async function POST(req: Request) {
 
     // -------------------------------------------------
     // REUSO: se tiver um pending com pix + gatewayId válido -> reutiliza
-    // (se não tiver gatewayId, NÃO reutiliza — evita PIX fantasma)
     // -------------------------------------------------
     if (recentPending) {
       const existingTx = recentPending.transactions?.[0] || null
@@ -285,7 +326,14 @@ export async function POST(req: Request) {
             ok: true,
             reused: true,
             orderId: recentPending.id,
-            transactionId: existingTx.id,
+
+            // ✅ PARA O FRONT: transactionId = gatewayId (txid real)
+            transactionId: existingTx.gatewayId,
+            gatewayId: existingTx.gatewayId,
+
+            // ✅ opcional/debug
+            dbTransactionId: existingTx.id,
+
             pixCopiaECola: existingTx.pixCopiaCola,
             qrCodeBase64: null,
             expiresAt: null,
@@ -326,7 +374,10 @@ export async function POST(req: Request) {
         traceable: true,
       })
 
-      const { pixCopiaECola, qrCodeBase64, expiresAt, raw } = resp as any
+      const pixCopiaECola = resolvePixCopiaECola(resp)
+      const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
+      const expiresAt = (resp as any)?.expiresAt ?? null
+      const raw = (resp as any)?.raw
 
       if (!pixCopiaECola) {
         return pixUnavailableResponse({
@@ -354,7 +405,7 @@ export async function POST(req: Request) {
         createdFrom: isUpsell ? "upsell" : "main",
         provider: {
           id: gatewayId,
-          gatewayId: gatewayId,
+          gatewayId,
           externalRef: recentPending.id,
         },
       })
@@ -375,7 +426,14 @@ export async function POST(req: Request) {
           ok: true,
           reused: true,
           orderId: recentPending.id,
-          transactionId: tx.id,
+
+          // ✅ PARA O FRONT
+          transactionId: gatewayId,
+          gatewayId,
+
+          // ✅ debug
+          dbTransactionId: tx.id,
+
           pixCopiaECola,
           qrCodeBase64,
           expiresAt,
@@ -431,7 +489,10 @@ export async function POST(req: Request) {
       traceable: true,
     })
 
-    const { pixCopiaECola, qrCodeBase64, expiresAt, raw } = resp as any
+    const pixCopiaECola = resolvePixCopiaECola(resp)
+    const qrCodeBase64 = (resp as any)?.qrCodeBase64 ?? null
+    const expiresAt = (resp as any)?.expiresAt ?? null
+    const raw = (resp as any)?.raw
 
     if (!pixCopiaECola) {
       return pixUnavailableResponse({
@@ -459,7 +520,7 @@ export async function POST(req: Request) {
       createdFrom: isUpsell ? "upsell" : "main",
       provider: {
         id: gatewayId,
-        gatewayId: gatewayId,
+        gatewayId,
         externalRef: order.id,
       },
     })
@@ -479,7 +540,14 @@ export async function POST(req: Request) {
       {
         ok: true,
         orderId: order.id,
-        transactionId: tx.id,
+
+        // ✅ PARA O FRONT
+        transactionId: gatewayId,
+        gatewayId,
+
+        // ✅ debug
+        dbTransactionId: tx.id,
+
         pixCopiaECola,
         qrCodeBase64,
         expiresAt,

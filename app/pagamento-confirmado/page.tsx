@@ -1,11 +1,12 @@
 // app/pagamento-confirmado/page.tsx
 import PagamentoConfirmadoClient from "./PagamentoConfirmadoClient"
 
-type Props = {
-  searchParams?: { orderId?: string }
+type PageProps = {
+  searchParams: Promise<{ orderId?: string }>
 }
 
-export default function PagamentoConfirmadoPage({ searchParams }: Props) {
-  const orderId = searchParams?.orderId || undefined
+export default async function PagamentoConfirmadoPage({ searchParams }: PageProps) {
+  const sp = await searchParams
+  const orderId = sp?.orderId || undefined
   return <PagamentoConfirmadoClient orderIdFromSearch={orderId} />
 }

@@ -1,3 +1,4 @@
+// app/pagamento-confirmado/PagamentoConfirmadoClient.tsx
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -64,6 +65,17 @@ const UPSELL_OPTIONS = [
     badgeTone: "red" as const,
   },
 ]
+
+// ✅ Upsell cache (lido pelo /pagamento)
+const LS_UPSELL_KEY = "checkout_upsell_payload_v1"
+const UPSELL_TTL_MS = 10 * 60 * 1000
+
+type UpsellCache = {
+  qty: number
+  priceCents: number
+  createdAt: number
+  baseOrderId?: string | null
+}
 
 function coerceNumbersFromOrder(order: OrderDTO | null) {
   if (!order) return []
@@ -169,10 +181,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         window.fbq("track", "Purchase", { value, currency: "BRL" }, { eventID: eventId })
 
         sessionStorage.setItem(sentKey, "1")
-        // opcional: também marca no localStorage pra persistir mais
-        // localStorage.setItem(sentKey, "1")
       } catch (e) {
-        // não quebra UX
         console.error("fbq Purchase error:", e)
       }
     }
@@ -183,7 +192,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         const already = sessionStorage.getItem(retryKey)
         if (already) return
 
-        // chama endpoint interno (fallback). Se não existir, apenas falha silenciosamente.
         await fetch("/api/meta/purchase-retry", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -192,7 +200,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         sessionStorage.setItem(retryKey, "1")
       } catch (e) {
-        // não quebra UX (endpoint pode ainda não existir)
         console.log("CAPI retry skipped/failed:", e)
       }
     }
@@ -205,15 +212,48 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const numbersPreview = useMemo(() => numbers.slice(0, 8), [numbers])
   const hasNumbersPreview = numbersPreview.length > 0
 
-  // ---------- TOKENS VISUAIS (mesmo DNA do /) ----------
+  // ---------- TOKENS VISUAIS ----------
   const BG = "#0B0F19"
   const GLASS = "rgba(255,255,255,0.06)"
-  const GLASS_SOFT = "rgba(255,255,255,0.04)"
   const BORDER = "rgba(255,255,255,0.10)"
   const MUTED = "rgba(255,255,255,0.68)"
   const GREEN = "#22C55E"
   const RED = "#DC2626"
   const RED_DARK = "#B91C1C"
+
+  // ✅ grava upsell de forma determinística (o /pagamento vai ler isso)
+  function persistUpsell(opt: { qty: number; priceCents: number }, baseOrderId: string) {
+    try {
+      if (typeof window === "undefined") return
+      const payload: UpsellCache = {
+        qty: Math.round(Number(opt.qty || 0)),
+        priceCents: Math.round(Number(opt.priceCents || 0)),
+        createdAt: Date.now(),
+        baseOrderId: baseOrderId || null,
+      }
+      // TTL curto, mas suficiente pra clicar e pagar
+      localStorage.setItem(LS_UPSELL_KEY, JSON.stringify(payload))
+      // opcional: marca pra debug
+      localStorage.setItem("lastUpsellBaseOrderId", String(baseOrderId || ""))
+      localStorage.setItem("lastUpsellPriceCents", String(payload.priceCents))
+      localStorage.setItem("lastUpsellQty", String(payload.qty))
+    } catch {}
+  }
+
+  function goToUpsellPayment(opt: { qty: number; priceCents: number }) {
+    if (!order?.id) return
+
+    // mantém seu store (se você usa em outros lugares)
+    try {
+      prepareUpsellOrder(opt.qty, opt.priceCents)
+    } catch {}
+
+    // 🔥 garante o valor certo SEM depender do store
+    persistUpsell(opt, order.id)
+
+    // 🔒 entra no modo upsell no /pagamento e amarra no order base
+    router.push(`/pagamento?upsell=1&orderId=${order.id}`)
+  }
 
   if (loading || !order) {
     return (
@@ -275,8 +315,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                 content: '""',
                 position: "absolute",
                 inset: -40,
-                background:
-                  "radial-gradient(circle at 30% 30%, rgba(34,197,94,0.30), transparent 55%)",
+                background: "radial-gradient(circle at 30% 30%, rgba(34,197,94,0.30), transparent 55%)",
               },
             }}
           >
@@ -293,7 +332,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
             Seus números já estão concorrendo. Guarde seu comprovante e acompanhe em “Minhas compras”.
           </Typography>
 
-          {/* Detalhes minimizados (dark) */}
           <Accordion
             sx={{
               mt: 2,
@@ -317,35 +355,20 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
             <AccordionDetails sx={{ pt: 0 }}>
               <Divider sx={{ borderColor: BORDER, mb: 1.2 }} />
 
-              <Box
-                sx={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 1.2,
-                  px: 0.5,
-                  pb: 0.4,
-                }}
-              >
+              <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1.2, px: 0.5, pb: 0.4 }}>
                 <Box sx={{ textAlign: "left" }}>
                   <Typography sx={{ fontSize: "0.72rem", color: MUTED }}>Números</Typography>
-                  <Typography sx={{ fontWeight: 1000, color: "#fff" }}>
-                    {order.quantity ?? "-"}
-                  </Typography>
+                  <Typography sx={{ fontWeight: 1000, color: "#fff" }}>{order.quantity ?? "-"}</Typography>
                 </Box>
 
                 <Box sx={{ textAlign: "right" }}>
                   <Typography sx={{ fontSize: "0.72rem", color: MUTED }}>Total pago</Typography>
-                  <Typography sx={{ fontWeight: 1000, color: GREEN }}>
-                    {formatBRL(order.amount)}
-                  </Typography>
+                  <Typography sx={{ fontWeight: 1000, color: GREEN }}>{formatBRL(order.amount)}</Typography>
                 </Box>
               </Box>
 
-              {/* ✅ PRÉVIA DE NÚMEROS */}
               <Box sx={{ mt: 1.2 }}>
-                <Typography sx={{ fontSize: "0.72rem", color: MUTED, mb: 0.7 }}>
-                  Prévia dos seus números
-                </Typography>
+                <Typography sx={{ fontSize: "0.72rem", color: MUTED, mb: 0.7 }}>Prévia dos seus números</Typography>
 
                 {hasNumbersPreview ? (
                   <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.7 }}>
@@ -378,8 +401,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                   </Box>
                 ) : (
                   <Typography sx={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.62)" }}>
-                    Seus números completos aparecem em{" "}
-                    <strong style={{ color: "#fff" }}>Minhas compras</strong>.
+                    Seus números completos aparecem em <strong style={{ color: "#fff" }}>Minhas compras</strong>.
                   </Typography>
                 )}
               </Box>
@@ -407,7 +429,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
             A maioria dos ganhadores entra com mais de um pacote. Garanta mais chances agora.
           </Typography>
 
-          {/* ✅ TIMER VERMELHO + BARRA */}
+          {/* TIMER */}
           <Box
             sx={{
               mt: 1.6,
@@ -435,14 +457,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
               </span>
             </Typography>
 
-            <Box
-              sx={{
-                height: 7,
-                borderRadius: 999,
-                bgcolor: "rgba(127,29,29,0.95)",
-                overflow: "hidden",
-              }}
-            >
+            <Box sx={{ height: 7, borderRadius: 999, bgcolor: "rgba(127,29,29,0.95)", overflow: "hidden" }}>
               <Box
                 sx={{
                   height: "100%",
@@ -495,20 +510,11 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     transition:
                       "transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease",
                     transform: active ? "translateY(-1px)" : "translateY(0)",
-                    boxShadow: active
-                      ? "0 16px 40px rgba(220,38,38,0.22)"
-                      : "0 10px 26px rgba(0,0,0,0.25)",
+                    boxShadow: active ? "0 16px 40px rgba(220,38,38,0.22)" : "0 10px 26px rgba(0,0,0,0.25)",
                     overflow: "hidden",
                   }}
                 >
-                  <Box
-                    sx={{
-                      display: "flex",
-                      alignItems: "flex-start",
-                      justifyContent: "space-between",
-                      gap: 1.5,
-                    }}
-                  >
+                  <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1.5 }}>
                     <Box sx={{ minWidth: 0 }}>
                       <Typography sx={{ fontWeight: 1000, color: "#fff", lineHeight: 1.1 }}>
                         {opt.label}
@@ -554,16 +560,15 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     </Typography>
                   </Box>
 
-                  <Typography sx={{ fontSize: "0.78rem", color: MUTED, mt: 0.9 }}>
-                    {opt.note}
-                  </Typography>
+                  <Typography sx={{ fontSize: "0.78rem", color: MUTED, mt: 0.9 }}>{opt.note}</Typography>
 
                   {active && (
                     <Button
                       fullWidth
-                      onClick={() => {
-                        prepareUpsellOrder(opt.qty, opt.priceCents)
-                        router.push("/pagamento")
+                      disabled={secondsLeft <= 0}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        goToUpsellPayment({ qty: opt.qty, priceCents: opt.priceCents })
                       }}
                       sx={{
                         mt: 1.5,
@@ -581,6 +586,10 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                           "100%": { boxShadow: "0 0 0 0 rgba(220,38,38,0)" },
                         },
                         "&:hover": { bgcolor: RED_DARK },
+                        "&.Mui-disabled": {
+                          bgcolor: "rgba(220,38,38,0.35)",
+                          color: "rgba(255,255,255,0.7)",
+                        },
                       }}
                     >
                       Adicionar {formatQtyLabel(opt.qty)} agora

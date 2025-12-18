@@ -1,7 +1,7 @@
 // app/pagamento/page.tsx
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   Container,
@@ -40,16 +40,27 @@ type OrderDTO = { id: string; amount: number; quantity: number }
 const LS_PENDING_KEY = "pix_pending_payload_v1"
 const PENDING_TTL_MS = 20 * 60 * 1000 // 20 min
 
+// ✅ Upsell (gerado no /pagamento-confirmado)
+const LS_UPSELL_KEY = "checkout_upsell_payload_v1"
+const UPSELL_TTL_MS = 10 * 60 * 1000
+
 type PendingPixCache = {
   orderId: string | null
-  transactionId: string | null
+  transactionId: string | null // ✅ ID DO DB (prisma.transaction.id)
   pixPayload: string
   amount: number // em reais
   qty: number
   createdAt: number
-  // ✅ NOVO: trava rígida pra não reutilizar pix de outro CPF/valor/qtd
   cacheKey?: string
-  cpf?: string // somente dígitos (não é obrigatório, serve pra debug local)
+  cpf?: string | null
+  mode?: "main" | "upsell"
+}
+
+type UpsellCache = {
+  qty: number
+  priceCents: number
+  createdAt: number
+  baseOrderId?: string | null
 }
 
 function safeJsonParse<T>(value: string | null): T | null {
@@ -86,12 +97,41 @@ function getCheckoutCustomerCpf() {
   return normalizeCpfDigits(cpf)
 }
 
-function buildPixCacheKey(input: { cpf: string; amountInCents: number; qty: number; orderIdFromUrl?: string | null }) {
+function readUpsellCache(): UpsellCache | null {
+  if (typeof window === "undefined") return null
+  const raw = localStorage.getItem(LS_UPSELL_KEY)
+  const p = safeJsonParse<UpsellCache>(raw)
+  if (!p) return null
+
+  const qty = Math.round(Number(p.qty || 0))
+  const priceCents = Math.round(Number(p.priceCents || 0))
+
+  if (!Number.isFinite(qty) || qty <= 0) return null
+  if (!Number.isFinite(priceCents) || priceCents <= 0) return null
+  if (!p.createdAt) return null
+  if (Date.now() - Number(p.createdAt) > UPSELL_TTL_MS) return null
+
+  return {
+    qty,
+    priceCents,
+    createdAt: Number(p.createdAt),
+    baseOrderId: (p.baseOrderId || null) as any,
+  }
+}
+
+function buildPixCacheKey(input: {
+  cpf: string
+  amountInCents: number
+  qty: number
+  orderIdFromUrl?: string | null
+  mode?: "main" | "upsell"
+}) {
   const cpf = normalizeCpfDigits(input.cpf)
   const amountInCents = Math.max(0, Math.round(Number(input.amountInCents || 0)))
   const qty = Math.max(0, Math.round(Number(input.qty || 0)))
   const order = (input.orderIdFromUrl || "").trim()
-  return `cpf:${cpf}|amt:${amountInCents}|qty:${qty}|order:${order}`
+  const mode = input.mode || "main"
+  return `mode:${mode}|cpf:${cpf}|amt:${amountInCents}|qty:${qty}|order:${order}`
 }
 
 // ===============================
@@ -100,6 +140,7 @@ export default function PagamentoPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const orderIdFromUrl = searchParams.get("orderId")
+  const isUpsell = searchParams.get("upsell") === "1"
 
   const { qty, totalInCents } = useCartStore()
 
@@ -110,11 +151,11 @@ export default function PagamentoPage() {
 
   const [orderId, setOrderId] = useState<string | null>(orderIdFromUrl)
 
-  // trava pra não gerar PIX duas vezes (StrictMode)
-  const pixRequestedRef = useRef(false)
+  // ✅ trava por cacheKey (não por render)
+  const lastRequestKeyRef = useRef<string | null>(null)
 
   const [pixPayload, setPixPayload] = useState("")
-  const [transactionId, setTransactionId] = useState<string | null>(null)
+  const [transactionId, setTransactionId] = useState<string | null>(null) // ✅ ID DO DB
   const [qrCodeDialogOpen, setQrCodeDialogOpen] = useState(false)
   const [snackbarOpen, setSnackbarOpen] = useState(false)
   const [snackbarMessage, setSnackbarMessage] = useState("")
@@ -123,16 +164,54 @@ export default function PagamentoPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // UI state
   const [manualChecking, setManualChecking] = useState(false)
   const paidRedirectedRef = useRef(false)
 
   const unitPrice = UNIT_PRICE_CENTS / 100
 
-  // ===========================================
-  // 0) Validação rígida do cache pendente (CPF + valor + qty + orderId)
-  //    Se não bater, limpa e libera gerar de novo.
-  // ===========================================
+  const upsell = useMemo(() => {
+    if (!isUpsell) return null
+    return readUpsellCache()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUpsell, orderIdFromUrl])
+
+  const intended = useMemo(() => {
+    if (isUpsell && upsell) {
+      return {
+        amount: upsell.priceCents / 100,
+        qty: upsell.qty,
+        mode: "upsell" as const,
+      }
+    }
+    return {
+      amount: resolved.amount,
+      qty: resolved.qty,
+      mode: "main" as const,
+    }
+  }, [isUpsell, upsell, resolved.amount, resolved.qty])
+
+  // 0) UPSell: força valores
+  useEffect(() => {
+    if (!isUpsell) return
+
+    const p = readUpsellCache()
+    if (!p) {
+      setError("Upsell expirou ou não foi encontrado. Volte e selecione a oferta novamente.")
+      setLoading(false)
+      return
+    }
+
+    setResolved({ amount: p.priceCents / 100, qty: p.qty })
+
+    // limpa visual (mas não “libera” request duplicado: trava é por cacheKey)
+    setPixPayload("")
+    setTransactionId(null)
+    setError(null)
+    setLoading(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUpsell])
+
+  // 1) Reuso seguro do cache (CPF+valor+qty+mode+order)
   useEffect(() => {
     if (typeof window === "undefined") return
 
@@ -143,55 +222,48 @@ export default function PagamentoPage() {
     }
 
     const cpf = getCheckoutCustomerCpf()
+
     const currentKey = buildPixCacheKey({
       cpf,
-      amountInCents: Math.round(resolved.amount * 100),
-      qty: resolved.qty,
+      amountInCents: Math.round(intended.amount * 100),
+      qty: intended.qty,
       orderIdFromUrl,
+      mode: intended.mode,
     })
 
-    // ✅ se o cache antigo não tem cacheKey, a gente considera inseguro e limpa (evita “grudar” em pix antigo)
     if (!pending?.cacheKey) {
       clearPendingPixCache()
       return
     }
 
-    // ✅ se o orderId na URL existe e não bate com o pendente, não reutiliza
     if (orderIdFromUrl && pending?.orderId && orderIdFromUrl !== pending.orderId) {
-      // não limpa aqui porque pode ser caso raro de voltar em outra order,
-      // mas também não pode reutilizar.
       return
     }
 
-    // ✅ se o cacheKey não bater, é outro CPF/valor/qty => LIMPA e reseta estado
     if (pending.cacheKey !== currentKey) {
       clearPendingPixCache()
-
-      // reseta estados pra não “grudar” no PIX antigo
       setPixPayload("")
       setTransactionId(null)
       setError(null)
       setLoading(true)
-
-      // MUITO IMPORTANTE: libera gerar de novo (StrictMode/ref)
-      pixRequestedRef.current = false
       return
     }
 
-    // ✅ Reuso seguro (cacheKey bate)
     if (!pixPayload && !transactionId) {
       setResolved({ amount: pending.amount, qty: pending.qty })
       setPixPayload(pending.pixPayload)
-      setTransactionId(pending.transactionId)
+      setTransactionId(pending.transactionId) // ✅ DB id
       setOrderId(pending.orderId || orderIdFromUrl || null)
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderIdFromUrl, resolved.amount, resolved.qty])
+  }, [orderIdFromUrl, intended.amount, intended.qty, intended.mode])
 
-  // 1) Se tiver orderId na URL, tenta carregar do backend (somente pra resolver valores)
+  // 2) Se tiver orderId na URL (main), resolve do backend
   useEffect(() => {
     const loadOrderData = async () => {
+      if (isUpsell) return
+
       if (!orderIdFromUrl) {
         setResolved({ amount: totalInCents / 100, qty })
         return
@@ -211,9 +283,9 @@ export default function PagamentoPage() {
     }
 
     loadOrderData()
-  }, [orderIdFromUrl, totalInCents, qty])
+  }, [isUpsell, orderIdFromUrl, totalInCents, qty])
 
-  // 2) Geração do PIX
+  // 3) Geração do PIX
   useEffect(() => {
     if (pixPayload && transactionId) {
       setLoading(false)
@@ -221,62 +293,70 @@ export default function PagamentoPage() {
     }
 
     const customerData = typeof window !== "undefined" ? localStorage.getItem("checkoutCustomer") : null
-
     if (!customerData) {
       router.replace("/dados")
       return
     }
 
-    if (!resolved.qty || resolved.qty <= 0 || !resolved.amount || resolved.amount <= 0) {
-      return
-    }
+    if (!intended.qty || intended.qty <= 0 || !intended.amount || intended.amount <= 0) return
 
     const customerParsed = safeJsonParse<any>(customerData)
     const cpfNow = normalizeCpfDigits(customerParsed?.cpf || customerParsed?.documentNumber || "")
-    const totalInCentsToSend = Math.round(resolved.amount * 100)
+
+    const totalInCentsToSend = Math.round(intended.amount * 100)
 
     const currentKey = buildPixCacheKey({
       cpf: cpfNow,
       amountInCents: totalInCentsToSend,
-      qty: resolved.qty,
+      qty: intended.qty,
       orderIdFromUrl,
+      mode: intended.mode,
     })
 
-    // ✅ Se existe pendente válido, SÓ REUSA se bater cacheKey
+    // ✅ trava absoluta: mesma intenção/cacheKey = não faz 2 requests nunca
+    if (lastRequestKeyRef.current === currentKey) return
+    lastRequestKeyRef.current = currentKey
+
+    // ✅ Se existe pendente válido e bate cacheKey, reusa
     if (typeof window !== "undefined") {
       const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
-      if (isPendingValid(pending)) {
-        // se não tiver cacheKey ou não bater, limpa (não reaproveitar lixo)
-        if (!pending?.cacheKey || pending.cacheKey !== currentKey) {
-          clearPendingPixCache()
-        } else {
-          setResolved({ amount: pending!.amount, qty: pending!.qty })
-          setPixPayload(pending!.pixPayload)
-          setTransactionId(pending!.transactionId)
-          setOrderId(pending!.orderId || orderIdFromUrl || null)
-          setLoading(false)
-          return
-        }
+      if (isPendingValid(pending) && pending?.cacheKey === currentKey) {
+        setResolved({ amount: pending!.amount, qty: pending!.qty })
+        setPixPayload(pending!.pixPayload)
+        setTransactionId(pending!.transactionId) // ✅ DB id
+        setOrderId(pending!.orderId || orderIdFromUrl || null)
+        setLoading(false)
+        return
       }
     }
-
-    if (pixRequestedRef.current) return
-    pixRequestedRef.current = true
 
     const generatePix = async () => {
       try {
         const customer = JSON.parse(customerData)
-        const totalInCentsToSendInner = Math.round(resolved.amount * 100)
+
+        const baseOrderId =
+          intended.mode === "upsell"
+            ? (upsell?.baseOrderId || orderIdFromUrl || null)
+            : null
 
         const response = await fetch("/api/pagamento/pix", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            quantity: resolved.qty,
-            totalInCents: totalInCentsToSendInner,
-            itemTitle: `${resolved.qty} números`,
-            // ✅ se o backend quiser amarrar num order existente
-            orderId: orderIdFromUrl || null,
+            quantity: intended.qty,
+            totalInCents: totalInCentsToSend,
+            itemTitle: intended.mode === "upsell" ? `Upsell +${intended.qty} números` : `${intended.qty} números`,
+
+            // ✅ main: mantém orderId
+            // ✅ upsell: NÃO amarra em orderId pago
+            orderId: intended.mode === "upsell" ? null : (orderIdFromUrl || null),
+
+            // ✅ seu backend lê body.upsell === true
+            upsell: intended.mode === "upsell",
+
+            // opcional (seu backend pode ignorar, ok)
+            baseOrderId,
+
             customer: {
               name: customer.nome,
               email: customer.email,
@@ -289,9 +369,7 @@ export default function PagamentoPage() {
 
         const data = await response.json()
 
-        if (!response.ok || data.error) {
-          throw new Error(data.error || "Falha ao gerar PIX")
-        }
+        if (!response.ok || data.error) throw new Error(data.error || "Falha ao gerar PIX")
 
         const copiaECola: string | null =
           data.pixCopiaECola ??
@@ -301,85 +379,67 @@ export default function PagamentoPage() {
           data.qr_code ??
           null
 
-        // ✅ IMPORTANTE: transactionId precisa ser o ID REAL do gateway (txid)
-        const txId: string | null =
+        // ✅ CRÍTICO:
+        // transactionId aqui tem que ser o ID DO DB (prisma.transaction.id),
+        // porque /api/transaction-status?id=... busca por esse id.
+        const txDbId: string | null =
           data.transactionId ??
-          data.gatewayId ??
-          data.txid ??
-          data.provider?.id ??
-          data.provider?.gatewayId ??
+          data.transaction?.id ??
           null
-
-        // Log curto pra depurar (sem expor payload)
-        try {
-          console.log("[pagamento] PIX API OK:", {
-            ok: data.ok,
-            hasCopiaECola: !!copiaECola,
-            txIdPrefix: txId ? String(txId).slice(0, 8) : null,
-            orderId: data.orderId || orderIdFromUrl || null,
-            cacheKeyPrefix: currentKey.slice(0, 32),
-          })
-        } catch {}
 
         if (!copiaECola) {
           console.error("[pagamento] Resposta da API PIX sem copia e cola:", data)
           throw new Error("PIX não retornou o código Copia e Cola.")
         }
-
-        // 🚨 Se não veio txid, não aceitamos: isso vira “QR fantasma”
-        if (!txId) {
-          console.error("[pagamento] PIX veio sem txid/gatewayId. Resposta:", data)
-          throw new Error("PIX retornou QR, mas não retornou txid do gateway (transação não confirmada).")
+        if (!txDbId) {
+          console.error("[pagamento] API PIX veio sem transactionId (DB). Resposta:", data)
+          throw new Error("PIX gerou, mas não retornou transactionId do sistema.")
         }
 
-        setPixPayload(copiaECola)
-        setTransactionId(String(txId))
+        setPixPayload(String(copiaECola))
+        setTransactionId(String(txDbId))
 
-        // 🔗 guarda eventId
         const fbEventIdFromApi = data.fbEventId || data.metaEventId
         if (fbEventIdFromApi && typeof window !== "undefined") {
           window.localStorage.setItem("lastFbEventId", String(fbEventIdFromApi))
         }
 
-        const newOrderId = data.orderId || orderIdFromUrl || null
+        const newOrderId = data.orderId || null
         if (newOrderId) {
           setOrderId(newOrderId)
-          if (typeof window !== "undefined") {
-            localStorage.setItem("lastOrderId", String(newOrderId))
-          }
+          if (typeof window !== "undefined") localStorage.setItem("lastOrderId", String(newOrderId))
         }
 
-        // ✅ salva cache pendente COM cacheKey rígido (CPF + valor + qty + order)
         if (typeof window !== "undefined") {
           const cache: PendingPixCache = {
             orderId: newOrderId,
-            transactionId: String(txId),
-            pixPayload: copiaECola,
-            amount: resolved.amount,
-            qty: resolved.qty,
+            transactionId: String(txDbId), // ✅ DB id
+            pixPayload: String(copiaECola),
+            amount: intended.amount,
+            qty: intended.qty,
             createdAt: Date.now(),
             cacheKey: currentKey,
             cpf: cpfNow || null,
+            mode: intended.mode,
           }
           localStorage.setItem(LS_PENDING_KEY, JSON.stringify(cache))
         }
 
+        setResolved({ amount: intended.amount, qty: intended.qty })
         setLoading(false)
       } catch (err: any) {
         console.error("Erro ao gerar PIX:", err)
-        // Se falhou, limpa cache pendente pra não reaproveitar lixo
         clearPendingPixCache()
         setError(err.message || "Erro ao gerar PIX")
         setLoading(false)
 
-        // libera novo request numa tentativa futura (sem travar pra sempre)
-        pixRequestedRef.current = false
+        // ✅ libera retry real (novo clique / reload)
+        lastRequestKeyRef.current = null
       }
     }
 
     generatePix()
 
-    // contador visual
     let minutes = 14
     let seconds = 28
     const interval = setInterval(() => {
@@ -398,7 +458,7 @@ export default function PagamentoPage() {
 
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router, resolved.qty, resolved.amount, orderIdFromUrl, pixPayload, transactionId])
+  }, [router, intended.qty, intended.amount, intended.mode, orderIdFromUrl, pixPayload, transactionId, upsell])
 
   // helper: checa pagamento
   const checkPaymentStatusOnce = async () => {
@@ -413,7 +473,11 @@ export default function PagamentoPage() {
       paidRedirectedRef.current = true
       clearPendingPixCache()
 
-      let finalOrderId: string | null = data.orderId || orderId || null
+      let finalOrderId: string | null =
+        data.orderId ||
+        orderId ||
+        (intended.mode === "upsell" ? (upsell?.baseOrderId || orderIdFromUrl || null) : null) ||
+        null
 
       if (!finalOrderId && typeof window !== "undefined") {
         finalOrderId = localStorage.getItem("lastOrderId") || localStorage.getItem("lastPaidOrderId") || null
@@ -428,7 +492,7 @@ export default function PagamentoPage() {
     }
   }
 
-  // 3) Polling
+  // 4) Polling
   useEffect(() => {
     if (!transactionId) return
 
@@ -453,7 +517,7 @@ export default function PagamentoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactionId, router, orderId])
 
-  // 4) Checar ao voltar pra aba
+  // 5) Checar ao voltar pra aba
   useEffect(() => {
     if (!transactionId) return
 
@@ -502,8 +566,6 @@ export default function PagamentoPage() {
     }
     setQrCodeDialogOpen(true)
   }
-
-  const handleCloseQRCode = () => setQrCodeDialogOpen(false)
 
   const handleIAlreadyPaid = async () => {
     if (!transactionId) {
@@ -585,12 +647,8 @@ export default function PagamentoPage() {
                   <Icon icon="mdi:alert-circle-outline" width={24} color="#EF4444" />
                 </Box>
                 <Box>
-                  <Typography sx={{ fontWeight: 800, color: "#fff" }}>
-                    Não foi possível gerar o PIX agora
-                  </Typography>
-                  <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.85rem" }}>
-                    {error}
-                  </Typography>
+                  <Typography sx={{ fontWeight: 800, color: "#fff" }}>Não foi possível gerar o PIX agora</Typography>
+                  <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.85rem" }}>{error}</Typography>
                 </Box>
               </Stack>
 
@@ -778,14 +836,7 @@ export default function PagamentoPage() {
                 />
               </Stack>
 
-              <Typography
-                sx={{
-                  color: "rgba(255,255,255,0.75)",
-                  fontSize: "0.78rem",
-                  mt: 0.4,
-                  lineHeight: 1.3,
-                }}
-              >
+              <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.78rem", mt: 0.4, lineHeight: 1.3 }}>
                 Pagou? Só aguarde aqui. <strong style={{ color: "#fff" }}>Não gere outro pagamento.</strong>
               </Typography>
             </Box>
@@ -810,11 +861,7 @@ export default function PagamentoPage() {
                 },
               }}
               startIcon={
-                manualChecking ? (
-                  <CircularProgress size={16} sx={{ color: "#22C55E" }} />
-                ) : (
-                  <Icon icon="mdi:check-circle-outline" width={18} />
-                )
+                manualChecking ? <CircularProgress size={16} sx={{ color: "#22C55E" }} /> : <Icon icon="mdi:check-circle-outline" width={18} />
               }
             >
               Já paguei
@@ -875,9 +922,7 @@ export default function PagamentoPage() {
           <Divider sx={{ borderColor: "rgba(255,255,255,0.10)", mb: 2 }} />
 
           <Box sx={{ mb: 2 }}>
-            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem", mb: 1.2 }}>
-              Como pagar com PIX
-            </Typography>
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem", mb: 1.2 }}>Como pagar com PIX</Typography>
 
             <Stack spacing={1.2}>
               {[
@@ -907,12 +952,8 @@ export default function PagamentoPage() {
                     {index + 1}
                   </Box>
                   <Box>
-                    <Typography sx={{ color: "#fff", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 }}>
-                      {step.title}
-                    </Typography>
-                    <Typography sx={{ color: "rgba(255,255,255,0.68)", fontSize: "0.78rem", lineHeight: 1.35 }}>
-                      {step.desc}
-                    </Typography>
+                    <Typography sx={{ color: "#fff", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 }}>{step.title}</Typography>
+                    <Typography sx={{ color: "rgba(255,255,255,0.68)", fontSize: "0.78rem", lineHeight: 1.35 }}>{step.desc}</Typography>
                   </Box>
                 </Stack>
               ))}
@@ -965,8 +1006,7 @@ export default function PagamentoPage() {
             <Stack direction="row" spacing={1} alignItems="flex-start">
               <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
               <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.75rem", lineHeight: 1.55 }}>
-                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong>{" "}
-                o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.{" "}
+                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong> o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.{" "}
                 <strong style={{ color: "#fff" }}>Se não aparecer na hora, é normal — o sistema confirma automaticamente.</strong>
               </Typography>
             </Stack>
@@ -987,14 +1027,7 @@ export default function PagamentoPage() {
           </Typography>
           <Box sx={{ my: 2, display: "flex", justifyContent: "center" }}>
             {pixPayload && (
-              <Box
-                sx={{
-                  p: 2,
-                  border: "4px solid #22C55E",
-                  borderRadius: 2,
-                  bgcolor: "white",
-                }}
-              >
+              <Box sx={{ p: 2, border: "4px solid #22C55E", borderRadius: 2, bgcolor: "white" }}>
                 <QRCode value={pixPayload} size={210} />
               </Box>
             )}
@@ -1007,23 +1040,13 @@ export default function PagamentoPage() {
           </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: "center", pb: 2.5 }}>
-          <Button
-            onClick={() => setQrCodeDialogOpen(false)}
-            variant="outlined"
-            size="medium"
-            sx={{ minWidth: 120, borderRadius: 999 }}
-          >
+          <Button onClick={() => setQrCodeDialogOpen(false)} variant="outlined" size="medium" sx={{ minWidth: 120, borderRadius: 999 }}>
             Fechar
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={snackbarOpen}
-        autoHideDuration={4000}
-        onClose={() => setSnackbarOpen(false)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
+      <Snackbar open={snackbarOpen} autoHideDuration={4000} onClose={() => setSnackbarOpen(false)} anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
         <Alert onClose={() => setSnackbarOpen(false)} severity={snackbarSeverity} sx={{ width: "100%" }}>
           {snackbarMessage}
         </Alert>

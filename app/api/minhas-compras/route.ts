@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma"
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production"
 
-const normalizeCpf = (value: string) => value.replace(/\D/g, "")
+const normalizeCpf = (value: string) => String(value || "").replace(/\D/g, "")
 
 // ✅ GET (para chamadas como /api/minhas-compras?cpf=...)
 export async function GET(req: NextRequest) {
@@ -23,34 +23,28 @@ export async function POST(req: Request) {
 // Lógica central reutilizada
 async function handleRequest(cpfRaw: string) {
   try {
-    const cpf = normalizeCpf(cpfRaw)
+    const cpfDigits = normalizeCpf(cpfRaw)
 
-    // Em dev, loga CPF completo; em prod, loga só final pra não expor dado sensível em logs
     if (!IS_PRODUCTION) {
-      console.log("🔎 BUSCA MINHAS COMPRAS CPF:", cpf)
+      console.log("🔎 BUSCA MINHAS COMPRAS CPF:", cpfDigits, "(raw:", cpfRaw, ")")
     } else {
-      const masked =
-        cpf && cpf.length >= 4 ? cpf.slice(-4) : "unknown"
+      const masked = cpfDigits && cpfDigits.length >= 4 ? cpfDigits.slice(-4) : "unknown"
       console.log("🔎 BUSCA MINHAS COMPRAS (prod) CPF final:", masked)
     }
 
-    if (!cpf || cpf.length < 11) {
-      return NextResponse.json(
-        { ok: false, error: "CPF inválido" },
-        { status: 400 },
-      )
+    if (!cpfDigits || cpfDigits.length < 11) {
+      return NextResponse.json({ ok: false, error: "CPF inválido" }, { status: 400 })
     }
 
-    const user = await prisma.user.findUnique({
-      where: { cpf },
-    })
-
-    if (!user) {
-      return NextResponse.json({ ok: true, orders: [] })
-    }
-
+    // ✅ Busca pedidos direto pelo relacionamento do usuário
+    // Isso evita depender de cpf ser @unique e cobre casos onde cpf antigo foi salvo com máscara.
     const orders = await prisma.order.findMany({
-      where: { userId: user.id },
+      where: {
+        OR: [
+          { user: { cpf: cpfDigits } },
+          { user: { cpf: cpfRaw } }, // fallback caso algum registro antigo tenha máscara
+        ],
+      },
       orderBy: { createdAt: "desc" },
       include: {
         transactions: true,
@@ -59,11 +53,11 @@ async function handleRequest(cpfRaw: string) {
     })
 
     const result = orders.map((o) => {
-      const qFromOrder = o.quantity ?? 0
+      const qFromOrder = (o as any).quantity ?? 0
       const qFromTickets = o.tickets?.length ?? 0
       const quantity = qFromOrder || qFromTickets || 0
 
-      const rawId = (o.id ?? "").replace(/-/g, "")
+      const rawId = String(o.id || "").replace(/-/g, "")
       const displayOrderCode = "#" + rawId.slice(-6).toUpperCase()
 
       return {
@@ -71,16 +65,16 @@ async function handleRequest(cpfRaw: string) {
         displayOrderCode,
         amount: o.amount,
         status: o.status,
-        createdAt: o.createdAt?.toISOString() ?? null,
+        createdAt: (o as any).createdAt?.toISOString?.() ?? null,
         quantity,
-        numbers: o.tickets?.map((t) => t.number) ?? [],
+        numbers: o.tickets?.map((t) => (t as any).number) ?? [],
         transactions:
           o.transactions?.map((t) => ({
             id: t.id,
             status: t.status,
             value: t.value,
             gatewayId: t.gatewayId,
-            pixCopiaCola: t.pixCopiaCola, // 👈 agora vindo pra frente
+            pixCopiaCola: t.pixCopiaCola,
           })) ?? [],
       }
     })
@@ -90,9 +84,6 @@ async function handleRequest(cpfRaw: string) {
     return NextResponse.json({ ok: true, orders: result })
   } catch (err: any) {
     console.error("ERRO /api/minhas-compras:", err)
-    return NextResponse.json(
-      { ok: false, error: "Erro ao buscar pedidos" },
-      { status: 500 },
-    )
+    return NextResponse.json({ ok: false, error: "Erro ao buscar pedidos" }, { status: 500 })
   }
 }

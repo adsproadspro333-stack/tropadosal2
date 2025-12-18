@@ -568,26 +568,57 @@ async function trySendPurchaseFallback(opts: { orderId: string; txId: string }) 
   return { sent: capiRes.ok, reason: capiRes.ok ? "ok" : "capi_not_ok" }
 }
 
-// GET /api/transaction-status?id=TRANSACTION_ID
+// GET /api/transaction-status?id=TRANSACTION_ID_OR_TXID
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
-    const id = searchParams.get("id")
+    const idRaw = searchParams.get("id")
+
+    const id = String(idRaw || "").trim()
 
     if (!id) {
       console.error("[transaction-status] Sem ID na query")
       return NextResponse.json({ ok: false, error: "Missing transaction id" }, { status: 400 })
     }
 
-    // pega tx + order
-    let tx = await prisma.transaction.findUnique({
-      where: { id },
+    // ==========================================================
+    // ✅ SUPORTE DUPLO:
+    // - id do Prisma (tx.id)
+    // - txid/gatewayId (tx.gatewayId)
+    //
+    // Importante: NÃO retornar 404 aqui, porque o front faz:
+    // if (!res.ok) return
+    // e mata o polling/redirect.
+    // ==========================================================
+
+    // 1) tenta por gatewayId (txid) primeiro (pode ter múltiplas, pega a mais recente)
+    let tx = await prisma.transaction.findFirst({
+      where: { gatewayId: id },
       include: { order: true },
+      orderBy: { createdAt: "desc" },
     })
 
+    // 2) fallback: tenta como id do banco (prisma)
     if (!tx) {
-      console.error("[transaction-status] Transação não encontrada:", id)
-      return NextResponse.json({ ok: false, error: "Transaction not found" }, { status: 404 })
+      tx = await prisma.transaction.findUnique({
+        where: { id },
+        include: { order: true },
+      })
+    }
+
+    if (!tx) {
+      console.warn("[transaction-status] Transação não encontrada (id pode ser txid ou db id):", id)
+
+      // ✅ devolve 200 pra não quebrar o polling
+      return NextResponse.json(
+        {
+          ok: true,
+          status: "pending",
+          orderId: null,
+          notFound: true,
+        },
+        { status: 200 },
+      )
     }
 
     const orderId = tx.orderId ?? tx.order?.id ?? null
@@ -668,7 +699,8 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      status: tx.status, // mantém compatível com seu front
+      // ✅ mantém compatível com seu front (ele espera "paid")
+      status: String(tx.status || "").toLowerCase(),
       orderId,
     })
   } catch (err: any) {
