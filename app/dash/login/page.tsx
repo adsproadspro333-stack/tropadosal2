@@ -42,7 +42,7 @@ function DashLoginInner() {
 
   useEffect(() => {
     if (e === "missing_secret") {
-      setErr("DASH_TOKEN_SECRET não configurado no Railway. Configure e faça deploy novamente.")
+      setErr("Você não tem permissão, bloqueamos o seu IP.")
     }
   }, [e])
 

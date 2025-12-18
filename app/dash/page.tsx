@@ -21,6 +21,7 @@ import {
   TableBody,
   IconButton,
   Tooltip,
+  TableContainer,
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 
@@ -32,6 +33,11 @@ type Overview = {
   ordersCreated: number
   transactionsTotal: number
   paidOrders: number
+
+  // (opcional, se você já adicionou no seu backend/overview)
+  paidValue?: number
+  pendingValue?: number
+  totalValue?: number
 }
 
 type Row = {
@@ -73,7 +79,6 @@ function maskCpf(cpf?: string | null) {
 function maskPhone(p?: string | null) {
   const s = String(p || "").replace(/\D/g, "")
   if (s.length < 10) return p || ""
-  // 55DDDN...
   if (s.startsWith("55") && s.length >= 12) {
     const ddd = s.slice(2, 4)
     const num = s.slice(4)
@@ -81,7 +86,6 @@ function maskPhone(p?: string | null) {
     if (num.length === 8) return `+55 (${ddd}) ${num.slice(0, 4)}-${num.slice(4)}`
     return `+55 (${ddd}) ${num}`
   }
-  // DDD + número
   const ddd = s.slice(0, 2)
   const num = s.slice(2)
   if (num.length === 9) return `(${ddd}) ${num.slice(0, 5)}-${num.slice(5)}`
@@ -91,10 +95,57 @@ function maskPhone(p?: string | null) {
 
 function statusChip(status: string) {
   const s = String(status || "").toLowerCase()
-  if (s === "paid") return <Chip size="small" label="PAID" sx={{ fontWeight: 900, bgcolor: "rgba(34,197,94,0.18)", color: "#22C55E", border: "1px solid rgba(34,197,94,0.28)" }} />
-  if (s === "pending" || s === "waiting_payment") return <Chip size="small" label="PENDING" sx={{ fontWeight: 900, bgcolor: "rgba(245,158,11,0.18)", color: "#F59E0B", border: "1px solid rgba(245,158,11,0.28)" }} />
-  if (s === "failed" || s === "canceled" || s === "cancelled") return <Chip size="small" label="FAILED" sx={{ fontWeight: 900, bgcolor: "rgba(239,68,68,0.18)", color: "#EF4444", border: "1px solid rgba(239,68,68,0.28)" }} />
-  return <Chip size="small" label={status || "—"} sx={{ fontWeight: 900, bgcolor: "rgba(148,163,184,0.16)", color: "rgba(255,255,255,0.78)", border: "1px solid rgba(148,163,184,0.18)" }} />
+  if (s === "paid")
+    return (
+      <Chip
+        size="small"
+        label="PAID"
+        sx={{
+          fontWeight: 900,
+          bgcolor: "rgba(34,197,94,0.18)",
+          color: "#22C55E",
+          border: "1px solid rgba(34,197,94,0.28)",
+        }}
+      />
+    )
+  if (s === "pending" || s === "waiting_payment")
+    return (
+      <Chip
+        size="small"
+        label="PENDING"
+        sx={{
+          fontWeight: 900,
+          bgcolor: "rgba(245,158,11,0.18)",
+          color: "#F59E0B",
+          border: "1px solid rgba(245,158,11,0.28)",
+        }}
+      />
+    )
+  if (s === "failed" || s === "canceled" || s === "cancelled")
+    return (
+      <Chip
+        size="small"
+        label="FAILED"
+        sx={{
+          fontWeight: 900,
+          bgcolor: "rgba(239,68,68,0.18)",
+          color: "#EF4444",
+          border: "1px solid rgba(239,68,68,0.28)",
+        }}
+      />
+    )
+  return (
+    <Chip
+      size="small"
+      label={status || "—"}
+      sx={{
+        fontWeight: 900,
+        bgcolor: "rgba(148,163,184,0.16)",
+        color: "rgba(255,255,255,0.78)",
+        border: "1px solid rgba(148,163,184,0.18)",
+      }}
+    />
+  )
 }
 
 export default function DashPage() {
@@ -110,6 +161,23 @@ export default function DashPage() {
   const [loadingList, setLoadingList] = useState(false)
   const [errTop, setErrTop] = useState<string | null>(null)
   const [errList, setErrList] = useState<string | null>(null)
+
+  // Somatórios da lista (pra cards de valor sem depender do backend)
+  const listTotals = useMemo(() => {
+    let paid = 0
+    let pending = 0
+    let total = 0
+
+    for (const r of rows) {
+      const v = Number(r.value || 0)
+      total += v
+      const st = String(r.status || "").toLowerCase()
+      if (st === "paid") paid += v
+      else if (st === "pending" || st === "waiting_payment") pending += v
+    }
+
+    return { paid, pending, total }
+  }, [rows])
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams()
@@ -199,7 +267,7 @@ export default function DashPage() {
             </Stack>
           </Stack>
 
-          {/* Cards */}
+          {/* Cards + filtros */}
           <Paper
             elevation={0}
             sx={{
@@ -250,6 +318,54 @@ export default function DashPage() {
                     {loadingTop ? "…" : overview?.paidOrders ?? "—"}
                   </Typography>
                 </Box>
+
+                {/* Valores (na lista) */}
+                <Box
+                  sx={{
+                    p: 1.2,
+                    borderRadius: 2,
+                    border: "1px solid rgba(34,197,94,0.22)",
+                    bgcolor: "rgba(34,197,94,0.08)",
+                    minWidth: 220,
+                  }}
+                >
+                  <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>Valor pago (na lista)</Typography>
+                  <Typography sx={{ color: "#22C55E", fontWeight: 950, fontSize: "1.15rem" }}>
+                    {formatBRL(listTotals.paid)}
+                  </Typography>
+                </Box>
+
+                <Box
+                  sx={{
+                    p: 1.2,
+                    borderRadius: 2,
+                    border: "1px solid rgba(245,158,11,0.22)",
+                    bgcolor: "rgba(245,158,11,0.08)",
+                    minWidth: 220,
+                  }}
+                >
+                  <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
+                    Valor pendente (na lista)
+                  </Typography>
+                  <Typography sx={{ color: "#F59E0B", fontWeight: 950, fontSize: "1.15rem" }}>
+                    {formatBRL(listTotals.pending)}
+                  </Typography>
+                </Box>
+
+                <Box
+                  sx={{
+                    p: 1.2,
+                    borderRadius: 2,
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    bgcolor: "rgba(255,255,255,0.06)",
+                    minWidth: 220,
+                  }}
+                >
+                  <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>Valor total (na lista)</Typography>
+                  <Typography sx={{ color: "#fff", fontWeight: 950, fontSize: "1.15rem" }}>
+                    {formatBRL(listTotals.total)}
+                  </Typography>
+                </Box>
               </Stack>
 
               {loadingTop && (
@@ -262,15 +378,12 @@ export default function DashPage() {
 
             {errTop && (
               <Box sx={{ mt: 1 }}>
-                <Typography sx={{ color: "#EF4444", fontWeight: 800, fontSize: "0.9rem" }}>
-                  {errTop}
-                </Typography>
+                <Typography sx={{ color: "#EF4444", fontWeight: 800, fontSize: "0.9rem" }}>{errTop}</Typography>
               </Box>
             )}
 
             <Divider sx={{ my: 2, borderColor: "rgba(255,255,255,0.08)" }} />
 
-            {/* Filters */}
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} alignItems={{ xs: "stretch", sm: "center" }}>
               <TextField
                 select
@@ -326,7 +439,7 @@ export default function DashPage() {
             </Stack>
           </Paper>
 
-          {/* Table */}
+          {/* Lista/Tabela com scroll interno */}
           <Paper
             elevation={0}
             sx={{
@@ -349,27 +462,51 @@ export default function DashPage() {
 
             {errList ? (
               <Box sx={{ px: 2, pb: 2 }}>
-                <Typography sx={{ color: "#EF4444", fontWeight: 800, fontSize: "0.9rem" }}>
-                  {errList}
-                </Typography>
+                <Typography sx={{ color: "#EF4444", fontWeight: 800, fontSize: "0.9rem" }}>{errList}</Typography>
               </Box>
             ) : (
-              <Box sx={{ width: "100%", overflowX: "auto" }}>
-                <Table size="small">
+              <TableContainer
+                sx={{
+                  // ✅ Scroll dentro da lista (não da página)
+                  maxHeight: { xs: "62vh", sm: "58vh" },
+                  overflowY: "auto",
+                  overflowX: "auto",
+                  WebkitOverflowScrolling: "touch",
+                  borderTop: "1px solid rgba(255,255,255,0.08)",
+                }}
+              >
+                <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Data</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Cliente</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>CPF</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Telefone</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Email</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Valor</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>Status</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>OrderId</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }}>GatewayId</TableCell>
-                      <TableCell sx={{ color: "rgba(255,255,255,0.75)", fontWeight: 900 }} align="right">
-                        Ações
-                      </TableCell>
+                      {[
+                        "Data",
+                        "Cliente",
+                        "CPF",
+                        "Telefone",
+                        "Email",
+                        "Valor",
+                        "Status",
+                        "OrderId",
+                        "GatewayId",
+                        "Ações",
+                      ].map((h, idx) => (
+                        <TableCell
+                          key={h}
+                          align={h === "Ações" ? "right" : "left"}
+                          sx={{
+                            color: "rgba(255,255,255,0.75)",
+                            fontWeight: 900,
+                            // ✅ header fixo com fundo consistente
+                            bgcolor: "rgba(11,15,25,0.92)",
+                            backdropFilter: "blur(8px)",
+                            borderBottom: "1px solid rgba(255,255,255,0.10)",
+                            whiteSpace: "nowrap",
+                            ...(idx === 0 ? { position: "sticky", left: 0, zIndex: 3 } : {}),
+                          }}
+                        >
+                          {h}
+                        </TableCell>
+                      ))}
                     </TableRow>
                   </TableHead>
 
@@ -383,32 +520,52 @@ export default function DashPage() {
                     ) : (
                       rows.map((r) => (
                         <TableRow key={r.transactionId} hover>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap" }}>
+                          <TableCell
+                            sx={{
+                              color: "rgba(255,255,255,0.85)",
+                              whiteSpace: "nowrap",
+                              // (opcional) primeira coluna “presa” pra não perder referência
+                              position: "sticky",
+                              left: 0,
+                              zIndex: 2,
+                              bgcolor: "rgba(11,15,25,0.86)",
+                              borderRight: "1px solid rgba(255,255,255,0.06)",
+                            }}
+                          >
                             {formatDateSP(r.createdAt)}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 800 }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 800, minWidth: 180 }}>
                             {r.name || "—"}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap" }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 140 }}>
                             {maskCpf(r.cpf)}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap" }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", minWidth: 160 }}>
                             {maskPhone(r.phone)}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.85)" }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.85)", minWidth: 220 }}>
                             {r.email || "—"}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 900, whiteSpace: "nowrap" }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.90)", fontWeight: 900, whiteSpace: "nowrap", minWidth: 110 }}>
                             {formatBRL(Number(r.value || 0))}
                           </TableCell>
-                          <TableCell>{statusChip(r.status)}</TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem" }}>
+
+                          <TableCell sx={{ minWidth: 110 }}>{statusChip(r.status)}</TableCell>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem", minWidth: 260 }}>
                             {r.orderId}
                           </TableCell>
-                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem" }}>
+
+                          <TableCell sx={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontSize: "0.78rem", minWidth: 260 }}>
                             {r.gatewayId || "—"}
                           </TableCell>
-                          <TableCell align="right">
+
+                          <TableCell align="right" sx={{ minWidth: 110 }}>
                             <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                               <Tooltip title="Copiar OrderId">
                                 <IconButton
@@ -438,7 +595,7 @@ export default function DashPage() {
                     )}
                   </TableBody>
                 </Table>
-              </Box>
+              </TableContainer>
             )}
           </Paper>
 
