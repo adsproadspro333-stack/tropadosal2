@@ -354,7 +354,7 @@ export default function PagamentoPage() {
             // ✅ seu backend lê body.upsell === true
             upsell: intended.mode === "upsell",
 
-            // opcional
+            // opcional (seu backend pode ignorar, ok)
             baseOrderId,
 
             customer: {
@@ -379,14 +379,12 @@ export default function PagamentoPage() {
           data.qr_code ??
           null
 
-        // ✅ CORREÇÃO CRÍTICA:
-        // seu backend está retornando:
-        // - dbTransactionId = ID do Prisma (transaction.id)
-        // - transactionId = gatewayId/txid (não serve pro /transaction-status se ele busca no DB)
+        // ✅ CRÍTICO:
+        // transactionId aqui tem que ser o ID DO DB (prisma.transaction.id),
+        // porque /api/transaction-status?id=... busca por esse id.
         const txDbId: string | null =
-          data.dbTransactionId ??
-          data.transaction?.id ??
           data.transactionId ??
+          data.transaction?.id ??
           null
 
         if (!copiaECola) {
@@ -654,7 +652,9 @@ export default function PagamentoPage() {
                 </Box>
               </Stack>
 
-              {/* ✅ removido o texto “PIX fantasma” pra não travar conversão */}
+              <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.78rem" }}>
+                Se o gateway retornar QR mas sem txid, consideramos inválido e bloqueamos pra evitar “PIX fantasma”.
+              </Typography>
 
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ mt: 1 }}>
                 <Button
@@ -709,9 +709,6 @@ export default function PagamentoPage() {
           "radial-gradient(1200px 600px at 20% 10%, rgba(34,197,94,0.16), transparent 60%), radial-gradient(900px 500px at 90% 0%, rgba(245,158,11,0.12), transparent 55%)",
       }}
     >
-      {/* ... RESTANTE DO SEU COMPONENTE SEM MEXER ... */}
-      {/* (mantive o resto intacto pra não quebrar seu front) */}
-
       <Container maxWidth="sm" sx={{ pt: { xs: 2, sm: 3 }, pb: 2, px: { xs: 2, sm: 0 } }}>
         {/* STATUS / TIMER */}
         <Paper
@@ -873,8 +870,148 @@ export default function PagamentoPage() {
         </Paper>
 
         {/* CARD PRINCIPAL PIX */}
-        {/* ... seu restante continua igual ... */}
-        {/* (mantive o resto do JSX igual ao seu original, só cortei aqui por espaço) */}
+        <Paper
+          elevation={0}
+          sx={{
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.10)",
+            bgcolor: "rgba(255,255,255,0.06)",
+            backdropFilter: "blur(10px)",
+            p: { xs: 2.1, sm: 3 },
+          }}
+        >
+          <Stack alignItems="center" spacing={0.9} sx={{ mb: 2.2 }}>
+            <Box
+              sx={{
+                width: 54,
+                height: 54,
+                borderRadius: 3,
+                bgcolor: "rgba(34,197,94,0.14)",
+                border: "1px solid rgba(34,197,94,0.22)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon icon="simple-icons:pix" width={30} color="#22C55E" />
+            </Box>
+
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: { xs: "1.05rem", sm: "1.2rem" } }}>
+              Pagar com PIX
+            </Typography>
+
+            <Typography
+              sx={{
+                fontWeight: 1000,
+                color: "#22C55E",
+                fontSize: { xs: "1.45rem", sm: "1.7rem" },
+                letterSpacing: "-0.02em",
+              }}
+            >
+              {formatBRL(resolved.amount)}
+            </Typography>
+
+            <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.78rem", textAlign: "center" }}>
+              Você está adquirindo{" "}
+              <strong style={{ color: "rgba(255,255,255,0.92)" }}>
+                {resolved.qty} Números × {formatBRL(unitPrice)}
+              </strong>
+            </Typography>
+          </Stack>
+
+          <Divider sx={{ borderColor: "rgba(255,255,255,0.10)", mb: 2 }} />
+
+          <Box sx={{ mb: 2 }}>
+            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "0.92rem", mb: 1.2 }}>Como pagar com PIX</Typography>
+
+            <Stack spacing={1.2}>
+              {[
+                { title: "Abra o app do seu banco", desc: "Entre na área PIX do aplicativo." },
+                { title: "Escolha QR Code ou Copia e Cola", desc: "Use uma das opções abaixo para finalizar." },
+                { title: "Confirme o pagamento", desc: "Verifique os dados e confirme a transação." },
+                { title: "Confirmação automática", desc: "Após pagar, aguarde nesta tela. Não atualize e não gere outro PIX." },
+              ].map((step, index) => (
+                <Stack key={index} direction="row" spacing={1.2} alignItems="flex-start">
+                  <Box
+                    sx={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: "999px",
+                      bgcolor: "rgba(255,255,255,0.10)",
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: "0.75rem",
+                      fontWeight: 900,
+                      color: "rgba(255,255,255,0.9)",
+                      flexShrink: 0,
+                      mt: 0.2,
+                    }}
+                  >
+                    {index + 1}
+                  </Box>
+                  <Box>
+                    <Typography sx={{ color: "#fff", fontSize: "0.86rem", fontWeight: 800, lineHeight: 1.25 }}>{step.title}</Typography>
+                    <Typography sx={{ color: "rgba(255,255,255,0.68)", fontSize: "0.78rem", lineHeight: 1.35 }}>{step.desc}</Typography>
+                  </Box>
+                </Stack>
+              ))}
+            </Stack>
+          </Box>
+
+          <Stack spacing={1.1} sx={{ mt: 2 }}>
+            <Button
+              variant="contained"
+              fullWidth
+              onClick={handleCopyPixCode}
+              startIcon={<ContentCopyIcon />}
+              disabled={!pixPayload}
+              sx={{
+                py: 1.25,
+                fontWeight: 1000,
+                borderRadius: 999,
+                textTransform: "none",
+                fontSize: "0.95rem",
+                bgcolor: "#22C55E",
+                "&:hover": { bgcolor: "#16A34A" },
+              }}
+            >
+              Copiar código Pix
+            </Button>
+
+            <Button
+              variant="outlined"
+              fullWidth
+              onClick={handleOpenQRCode}
+              startIcon={<QrCode2Icon />}
+              disabled={!pixPayload}
+              sx={{
+                py: 1.15,
+                fontWeight: 900,
+                borderRadius: 999,
+                textTransform: "none",
+                fontSize: "0.9rem",
+                borderColor: "rgba(255,255,255,0.22)",
+                color: "rgba(255,255,255,0.88)",
+                bgcolor: "rgba(255,255,255,0.04)",
+                "&:hover": { bgcolor: "rgba(255,255,255,0.06)" },
+              }}
+            >
+              Ver QR Code
+            </Button>
+          </Stack>
+
+          <Box sx={{ mt: 2.2, pt: 1.4, borderTop: "1px dashed rgba(255,255,255,0.18)" }}>
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <Icon icon="mdi:information-outline" width={18} color="rgba(255,255,255,0.70)" style={{ marginTop: 2 }} />
+              <Typography sx={{ color: "rgba(255,255,255,0.70)", fontSize: "0.75rem", lineHeight: 1.55 }}>
+                <strong style={{ color: "rgba(255,255,255,0.92)" }}>Importante:</strong> o PIX pode confirmar em segundos. Se você acabou de pagar, mantenha esta tela aberta.{" "}
+                <strong style={{ color: "#fff" }}>Se não aparecer na hora, é normal — o sistema confirma automaticamente.</strong>
+              </Typography>
+            </Stack>
+          </Box>
+        </Paper>
       </Container>
 
       <Dialog open={qrCodeDialogOpen} onClose={() => setQrCodeDialogOpen(false)} maxWidth="xs" fullWidth>
