@@ -20,6 +20,8 @@ model User {
   state     String?
   zip       String?
   orders    Order[]
+
+  @@index([createdAt])
 }
 
 model Order {
@@ -36,6 +38,8 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
 }
 
 model Transaction {
@@ -44,7 +48,6 @@ model Transaction {
   value   Float
   status  String @default("pending")
 
-  // ✅ MWBank txid/idTransaction precisa ser único no banco (anti duplicação / anti pix fantasma)
   gatewayId String? @unique
 
   createdAt    DateTime @default(now())
@@ -55,6 +58,8 @@ model Transaction {
 
   @@index([orderId])
   @@index([status])
+  @@index([createdAt])
+  @@index([status, createdAt])
 }
 
 model Ticket {
@@ -66,4 +71,5 @@ model Ticket {
 
   @@index([orderId])
   @@index([number])
+  @@index([createdAt])
 }

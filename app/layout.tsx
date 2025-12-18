@@ -7,7 +7,7 @@ import { ThemeProvider } from "@mui/material/styles"
 import CssBaseline from "@mui/material/CssBaseline"
 import { theme } from "./theme"
 import "./globals.css"
-import HeaderBar from "./components/HeaderBar"
+import ConditionalHeader from "./components/ConditionalHeader"
 import { ToastProvider } from "./components/ui/Toast"
 
 const publicSans = Public_Sans({
@@ -72,24 +72,11 @@ window.fbq = window.fbq || function() {
           <ThemeProvider theme={theme}>
             <CssBaseline />
             <ToastProvider>
-              {/* Header */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  width: "100%",
-                }}
-              >
-                <div style={{ width: "100%", maxWidth: 480 }}>
-                  <HeaderBar />
-                </div>
-              </div>
+              {/* Header (auto-esconde no /dash) */}
+              <ConditionalHeader />
 
               {/* Conteúdo */}
-              <main
-                className="page-content"
-                style={{ minHeight: "100dvh" }}
-              >
+              <main className="page-content" style={{ minHeight: "100dvh" }}>
                 {children}
               </main>
             </ToastProvider>
