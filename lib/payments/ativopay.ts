@@ -1,8 +1,8 @@
 // lib/payments/ativopay.ts
 // ✅ Mantém o mesmo arquivo/nome para não quebrar imports
 // ✅ Integra com MWBank
-// ✅ Anti PIX fantasma: confirma existência no gateway via GET /pix/{txid} antes de retornar
-// ✅ Hardening auth: tenta variações de header (cert_client e access_token) para evitar "Unauthorized" em prod
+// ✅ Modo SOFT (default): NÃO bloqueia por falta de confirmação via GET /pix/{txid}
+// ✅ Modo STRICT: confirma existência no gateway via GET /pix/{txid} antes de retornar
 
 type CreatePixParams = {
   amount: number // em centavos
@@ -86,6 +86,9 @@ function getEnv() {
 
   const TIMEOUT_MS = Number(process.env.MWBANK_TIMEOUT_MS || 12000)
 
+  // ✅ STRICT_CONFIRM: 1 = confirma via GET /pix/{txid}; 0 = não confirma (SOFT)
+  const STRICT_CONFIRM = String(process.env.MWBANK_STRICT_CONFIRM || "0").trim() === "1"
+
   return {
     BASE_URL,
     CLIENT_ID,
@@ -95,6 +98,7 @@ function getEnv() {
     GET_TX_PATH_PREFIX,
     GET_TX_PATH_PREFIX_FALLBACK,
     TIMEOUT_MS,
+    STRICT_CONFIRM,
   }
 }
 
@@ -103,10 +107,6 @@ function buildMwUrl(baseUrl: string, prefixRaw: string, txid: string) {
   const p = prefix.startsWith("/") ? prefix : `/${prefix}`
   return `${baseUrl}${p}${encodeURIComponent(String(txid).trim())}`
 }
-
-// =====================
-// Token Manager (cache + auto-renew + dedupe concorrência)
-// =====================
 
 const TOKEN_RENEW_SKEW_MS = 90_000
 const MIN_TTL_SEC = 60
@@ -170,7 +170,6 @@ async function fetchNewAccessToken() {
 
   const url = `${BASE_URL}/auth/token`
 
-  // ✅ tenta 2 formatos de cert_client: puro e com prefixo "cert_client"
   const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`]
 
   let last: any = null
@@ -207,7 +206,7 @@ async function fetchNewAccessToken() {
   console.error("MWBANK AUTH ERROR:", {
     httpStatus: last?.status,
     payload: { success: data?.success, error: data?.error, message: data?.message },
-    client_id: mask(getEnv().CLIENT_ID),
+    client_id: mask(CLIENT_ID),
     triedCertModes: ["base64", "cert_client+base64"],
   })
 
@@ -265,7 +264,6 @@ function buildMwHeaders(opts: {
     client_id: opts.clientId,
   }
 
-  // ✅ manda ambos pra matar proxy/gateway chato
   if (opts.accessToken) {
     headers.Authorization = `Bearer ${opts.accessToken}`
     headers.access_token = String(opts.accessToken)
@@ -317,11 +315,7 @@ function pickGetTx(data: any) {
 async function getTransactionFromGateway(txid: string) {
   const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, GET_TX_PATH_PREFIX, GET_TX_PATH_PREFIX_FALLBACK, TIMEOUT_MS } = getEnv()
 
-  if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
-  if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
-
   let accessToken = await getAccessToken()
-
   const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
 
   const doGet = async (url: string, cert_client?: string) => {
@@ -375,7 +369,7 @@ async function getTransactionFromGateway(txid: string) {
 }
 
 export async function createPixTransaction(params: CreatePixParams) {
-  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS } = getEnv()
+  const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS, STRICT_CONFIRM } = getEnv()
 
   if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
   if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
@@ -441,27 +435,43 @@ export async function createPixTransaction(params: CreatePixParams) {
       client_id: mask(CLIENT_ID),
       has_client_secret: !!CLIENT_SECRET,
       has_cert_client: !!CERT_CLIENT_BASE64,
-      triedCertModes: ["base64", "cert_client+base64"],
+      strictConfirm: STRICT_CONFIRM,
     })
     throw new Error(`Falha ao gerar PIX (MWBANK) (HTTP ${created?.res?.status}): ${created?.text}`)
   }
 
   const picked = pickCreatedPix(created.data)
 
+  // ✅ regra mínima pra não virar caos:
+  // se não vier txid+copia, não tem como o front pagar.
   if (!picked.txid || !picked.copia) {
-    console.error("MWBANK CREATE PIX: resposta sem TXID/pixCopiaECola (bloqueado):", {
+    console.error("MWBANK CREATE PIX: resposta sem TXID/pixCopiaECola:", {
       keys: Object.keys(created.data || {}),
       dataPreview: created.data,
       code: externalRef,
       amount: amountBRL,
+      strictConfirm: STRICT_CONFIRM,
     })
-    throw new Error("MWBANK: PIX não retornou txid/pixCopiaECola. Transação não confirmada.")
+    throw new Error("MWBANK: resposta sem txid/pixCopiaECola.")
   }
 
-  const check = await getTransactionFromGateway(picked.txid)
+  // ✅ SOFT MODE: não confirma no GET (menos chamadas, menos chance de travar)
+  if (!STRICT_CONFIRM) {
+    return {
+      raw: { created: created.data },
+      transactionId: picked.txid,
+      amount: amountBRL,
+      status: picked.status || null,
+      pixCopiaECola: picked.copia,
+      qrCodeBase64: null,
+      expiresAt: null,
+    }
+  }
 
+  // ✅ STRICT MODE (opcional): confirma via GET antes de retornar
+  const check = await getTransactionFromGateway(picked.txid)
   if (!check.ok) {
-    console.error("MWBANK CREATE PIX: txid não confirmado no gateway (bloqueado):", {
+    console.error("MWBANK STRICT: txid não confirmado no gateway (bloqueado):", {
       txid: picked.txid,
       code: externalRef,
       amount: amountBRL,
@@ -469,31 +479,24 @@ export async function createPixTransaction(params: CreatePixParams) {
       text: (check as any)?.text,
       urlTried: (check as any)?.urlTried,
     })
-    throw new Error("MWBANK: PIX não confirmado no gateway. Bloqueado para evitar PIX fantasma.")
+    throw new Error("MWBANK: txid não confirmado no gateway (strict).")
   }
 
   const gw = pickGetTx(check.data)
 
   if (!gw.txid || String(gw.txid).trim() !== String(picked.txid).trim()) {
-    console.error("MWBANK GET TX: retorno inconsistente (bloqueado):", {
+    console.error("MWBANK STRICT: retorno inconsistente:", {
       expected: picked.txid,
       got: gw.txid,
       url: (check as any)?.url,
       dataPreview: check.data,
     })
-    throw new Error("MWBANK: retorno inconsistente ao confirmar transação. Bloqueado.")
+    throw new Error("MWBANK: retorno inconsistente ao confirmar transação (strict).")
   }
 
   const finalCopia = gw.copia || picked.copia
-  const finalQr = gw.qr || picked.qr || null
-
   if (!finalCopia) {
-    console.error("MWBANK GET TX: sem pixCopiaECola mesmo após confirmar (bloqueado):", {
-      txid: picked.txid,
-      url: (check as any)?.url,
-      dataPreview: check.data,
-    })
-    throw new Error("MWBANK: transação confirmada mas sem pixCopiaECola. Bloqueado.")
+    throw new Error("MWBANK: confirmado mas sem pixCopiaECola (strict).")
   }
 
   return {
@@ -504,6 +507,5 @@ export async function createPixTransaction(params: CreatePixParams) {
     pixCopiaECola: finalCopia,
     qrCodeBase64: null,
     expiresAt: null,
-    // (finalQr fica no raw.confirmed se você quiser usar depois)
   }
 }
