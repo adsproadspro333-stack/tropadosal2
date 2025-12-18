@@ -1,7 +1,7 @@
 // app/dash/login/page.tsx
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   Box,
@@ -18,14 +18,15 @@ import {
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 
+export const dynamic = "force-dynamic"
+
 function sanitizeNext(nextRaw: string | null) {
   const n = String(nextRaw || "").trim()
-  // ✅ só permitimos navegar dentro do /dash (protege contra open-redirect)
   if (n.startsWith("/dash")) return n
   return "/dash"
 }
 
-export default function DashLoginPage() {
+function DashLoginInner() {
   const router = useRouter()
   const search = useSearchParams()
 
@@ -57,15 +58,11 @@ export default function DashLoginPage() {
         body: JSON.stringify({
           user: String(user || "").trim(),
           pass: String(pass || ""),
-          next,
         }),
       })
 
       const data = await res.json().catch(() => null)
-
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || "Falha no login")
-      }
+      if (!res.ok || !data?.ok) throw new Error(data?.error || "Falha no login")
 
       router.replace(next)
     } catch (ex: any) {
@@ -89,7 +86,7 @@ export default function DashLoginPage() {
           }}
         >
           <Stack spacing={2}>
-            <Typography sx={{ fontWeight: 900, color: "#fff", fontSize: "1.2rem" }}>
+            <Typography sx={{ fontWeight: 950, color: "#fff", fontSize: "1.2rem" }}>
               Login do Dashboard
             </Typography>
 
@@ -105,9 +102,7 @@ export default function DashLoginPage() {
               onChange={(e) => setUser(e.target.value)}
               fullWidth
               autoComplete="username"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit()
-              }}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
               InputLabelProps={{ style: { color: "rgba(255,255,255,0.7)" } }}
               sx={{
                 input: { color: "#fff" },
@@ -122,9 +117,7 @@ export default function DashLoginPage() {
               onChange={(e) => setPass(e.target.value)}
               fullWidth
               autoComplete="current-password"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit()
-              }}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
               InputLabelProps={{ style: { color: "rgba(255,255,255,0.7)" } }}
               sx={{
                 input: { color: "#fff" },
@@ -156,7 +149,7 @@ export default function DashLoginPage() {
                 borderRadius: 999,
                 py: 1.2,
                 textTransform: "none",
-                fontWeight: 900,
+                fontWeight: 950,
                 bgcolor: "#22C55E",
                 "&:hover": { bgcolor: "#16A34A" },
               }}
@@ -168,5 +161,33 @@ export default function DashLoginPage() {
         </Paper>
       </Container>
     </Box>
+  )
+}
+
+export default function DashLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <Box
+          sx={{
+            minHeight: "100vh",
+            bgcolor: "#0B0F19",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            px: 2,
+          }}
+        >
+          <Stack spacing={2} alignItems="center">
+            <CircularProgress />
+            <Typography sx={{ color: "rgba(255,255,255,0.75)", fontSize: "0.9rem" }}>
+              Carregando…
+            </Typography>
+          </Stack>
+        </Box>
+      }
+    >
+      <DashLoginInner />
+    </Suspense>
   )
 }
