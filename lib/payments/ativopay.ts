@@ -42,6 +42,32 @@ function withTimeout(ms: number) {
 }
 
 /* ----------------------------------------------------
+   🔧 NORMALIZA BASE64 (cert_client)
+---------------------------------------------------- */
+function normalizeBase64OneLine(value?: string) {
+  let v = String(value || "").trim()
+  if (!v) return ""
+  // remove aspas e espaços/quebras de linha
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1).trim()
+  }
+  v = v.replace(/[\r\n\s]+/g, "")
+  // aceita base64url e ajusta padding
+  v = v.replace(/-/g, "+").replace(/_/g, "/")
+  const mod = v.length % 4
+  if (mod === 2) v += "=="
+  else if (mod === 3) v += "="
+  else if (mod === 1) return ""
+  try {
+    const buf = Buffer.from(v, "base64")
+    if (!buf || buf.length === 0) return ""
+    return buf.toString("base64")
+  } catch {
+    return ""
+  }
+}
+
+/* ----------------------------------------------------
    🔍 DEEP SEARCH PIX (BR CODE 000201)
 ---------------------------------------------------- */
 function deepFindPixBrCode(obj: any): string | null {
@@ -51,7 +77,7 @@ function deepFindPixBrCode(obj: any): string | null {
     const s = String(v || "").trim()
     if (!s) return false
     if (s.length < 40) return false
-    return s.startsWith("000201") || s.includes("000201")
+    return s.includes("000201")
   }
 
   const visit = (node: any): string | null => {
@@ -76,7 +102,7 @@ function deepFindPixBrCode(obj: any): string | null {
     }
 
     for (const key of Object.keys(node)) {
-      const found = visit(node[key])
+      const found = visit((node as any)[key])
       if (found) return found
     }
     return null
@@ -92,11 +118,13 @@ function getEnv() {
   const BASE_URL = (process.env.MWBANK_BASE_URL || "https://core.mwbank.app").replace(/\/+$/, "")
   const CLIENT_ID = (process.env.MWBANK_CLIENT_ID || "").trim()
   const CLIENT_SECRET = (process.env.MWBANK_CLIENT_SECRET || "").trim()
-  const CERT_CLIENT_BASE64 = (process.env.MWBANK_CERT_CLIENT || "").replace(/\s+/g, "")
+  const CERT_CLIENT_BASE64 = normalizeBase64OneLine(process.env.MWBANK_CERT_CLIENT)
+
   const SITE_URL = (process.env.SITE_URL || "").replace(/\/+$/, "")
   const DEFAULT_WEBHOOK_URL =
     (process.env.MWBANK_WEBHOOK_URL || "").trim() ||
     (SITE_URL ? `${SITE_URL}/api/webhook/ativopay` : "")
+
   const TIMEOUT_MS = Number(process.env.MWBANK_TIMEOUT_MS || 12000)
 
   return {
@@ -135,6 +163,11 @@ async function mwFetch(url: string, init: RequestInit, timeoutMs: number) {
   }
 }
 
+function isUnauthorized(resStatus: number, data: any) {
+  const msg = String(data?.error || data?.message || data?.data?.error || data?.data?.message || "").toLowerCase()
+  return resStatus === 401 || msg.includes("unauthor")
+}
+
 async function getAccessToken() {
   const now = Date.now()
   if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.token
@@ -142,40 +175,72 @@ async function getAccessToken() {
 
   inFlightTokenPromise = (async () => {
     const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS } = getEnv()
+
+    if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
+    if (!CERT_CLIENT_BASE64) throw new Error("MWBANK_CERT_CLIENT inválido/ausente (base64 em 1 linha)")
+
     const url = `${BASE_URL}/auth/token`
+    const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
 
-    const res = await mwFetch(
-      url,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          client_id: CLIENT_ID,
-          cert_client: CERT_CLIENT_BASE64,
+    let last: any = null
+
+    for (const cert_client of certModes) {
+      // 1) sem body
+      last = await mwFetch(
+        url,
+        {
+          method: "POST",
+          headers: { Accept: "application/json", client_id: CLIENT_ID, cert_client },
         },
-      },
-      TIMEOUT_MS,
-    )
+        TIMEOUT_MS,
+      )
 
-    const token =
-      res.data?.access_token ||
-      res.data?.token ||
-      res.data?.data?.access_token ||
-      null
+      // 2) fallback com JSON vazio
+      if (!last.res.ok) {
+        last = await mwFetch(
+          url,
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              client_id: CLIENT_ID,
+              cert_client,
+            },
+            body: JSON.stringify({}),
+          },
+          TIMEOUT_MS,
+        )
+      }
 
-    if (!res.res.ok || !token) {
-      throw new Error("MWBANK auth falhou")
+      const token =
+        last.data?.access_token ||
+        last.data?.token ||
+        last.data?.data?.access_token ||
+        null
+
+      if (last.res.ok && token && !last.data?.error) {
+        const expiresInSecRaw = Number(last.data?.expires_in ?? last.data?.expiresIn ?? 3600)
+        const expiresInSec = Number.isFinite(expiresInSecRaw) ? expiresInSecRaw : 3600
+        cachedToken = { token: String(token), expiresAt: Date.now() + Math.max(60, expiresInSec) * 1000 }
+        return cachedToken.token
+      }
     }
 
-    cachedToken = {
-      token: String(token),
-      expiresAt: Date.now() + 60 * 60 * 1000,
-    }
+    console.error("MWBANK AUTH ERROR:", {
+      httpStatus: last?.res?.status,
+      payloadPreview: last?.data,
+      client_id: mask(getEnv().CLIENT_ID),
+    })
 
-    return cachedToken.token
+    throw new Error("MWBANK auth falhou")
   })()
 
-  return inFlightTokenPromise
+  try {
+    return await inFlightTokenPromise
+  } finally {
+    inFlightTokenPromise = null
+  }
 }
 
 /* ----------------------------------------------------
@@ -184,81 +249,127 @@ async function getAccessToken() {
 export async function createPixTransaction(params: CreatePixParams) {
   const { BASE_URL, CLIENT_ID, CLIENT_SECRET, CERT_CLIENT_BASE64, DEFAULT_WEBHOOK_URL, TIMEOUT_MS } = getEnv()
 
-  const accessToken = await getAccessToken()
+  if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
+  if (!BASE_URL) throw new Error("MWBANK_BASE_URL inválida")
+
+  let accessToken = await getAccessToken()
   const url = `${BASE_URL}/pix`
 
   const externalRef = params.items?.[0]?.externalRef || `order-${Date.now()}`
   const amountBRL = centsToBRL(params.amount)
 
-  const postbackUrl = params.postbackUrl || DEFAULT_WEBHOOK_URL
-  if (!postbackUrl?.startsWith("https://")) {
+  const postbackUrl = (params.postbackUrl || DEFAULT_WEBHOOK_URL || "").trim()
+  if (!postbackUrl.startsWith("https://")) {
     throw new Error("Webhook inválido (precisa https)")
   }
 
   const body = {
     code: externalRef,
     amount: amountBRL,
-    email: params.customer.email,
-    document: params.customer.document.number.replace(/\D/g, ""),
+    email: params.customer?.email,
+    document: String(params.customer?.document?.number || "").replace(/\D/g, ""),
     url: postbackUrl,
   }
 
-  const created = await mwFetch(
-    url,
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        client_id: CLIENT_ID,
-        Authorization: `Bearer ${accessToken}`,
-        access_token: accessToken,
-        ...(CERT_CLIENT_BASE64 ? { cert_client: CERT_CLIENT_BASE64 } : {}),
-        ...(CLIENT_SECRET ? { client_secret: CLIENT_SECRET } : {}),
+  const doCreate = async (cert_client?: string) => {
+    return await mwFetch(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          client_id: CLIENT_ID,
+          Authorization: `Bearer ${accessToken}`,
+          access_token: accessToken,
+          ...(cert_client ? { cert_client } : {}),
+          ...(CLIENT_SECRET ? { client_secret: CLIENT_SECRET } : {}),
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    },
-    TIMEOUT_MS,
-  )
+      TIMEOUT_MS,
+    )
+  }
 
-  if (!created.res.ok) {
+  const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
+
+  let created: any = null
+  for (const cert_client of certModes.length ? certModes : [undefined]) {
+    created = await doCreate(cert_client)
+
+    // retry 1x em 401
+    if (!created.res.ok && isUnauthorized(created.res.status, created.data)) {
+      invalidateTokenCache()
+      accessToken = await getAccessToken()
+      created = await doCreate(cert_client)
+    }
+
+    if (created.res.ok) break
+  }
+
+  if (!created?.res?.ok) {
     console.error("MWBANK CREATE PIX ERROR:", {
-      status: created.res.status,
-      payload: created.data,
-      body: created.text?.slice(0, 800),
+      status: created?.res?.status,
+      payload: created?.data,
+      body: created?.text?.slice(0, 1200),
       code: externalRef,
       amount: amountBRL,
       client_id: mask(CLIENT_ID),
+      has_client_secret: !!CLIENT_SECRET,
+      has_cert_client: !!CERT_CLIENT_BASE64,
     })
     throw new Error("Falha ao gerar PIX (MWBANK)")
   }
 
   // 🔥 PARSER BLINDADO
   const raw = created.data
+  const d = raw?.data ?? raw
+
   const pixCopiaECola =
+    d?.pixCopiaECola ||
+    d?.copiaECola ||
+    d?.copia_e_cola ||
+    d?.brCode ||
+    d?.payload ||
+    d?.emv ||
+    d?.copyPaste ||
+    d?.copy_paste ||
+    d?.pix?.emv ||
+    d?.pix?.brCode ||
+    d?.pix?.payload ||
     raw?.pixCopiaECola ||
     raw?.copiaECola ||
     raw?.brCode ||
     raw?.payload ||
-    raw?.data?.pixCopiaECola ||
-    raw?.data?.copiaECola ||
-    raw?.data?.brCode ||
-    raw?.data?.payload ||
+    raw?.emv ||
     deepFindPixBrCode(raw)
 
   const txid =
+    d?.txid ||
+    d?.transactionId ||
     raw?.txid ||
     raw?.transactionId ||
-    raw?.data?.txid ||
-    raw?.data?.transactionId ||
     null
+
+  // ✅ log do caso que te quebra hoje: 200 sem copia e cola
+  if (!pixCopiaECola) {
+    console.error("🚨 MWBANK PIX SEM COPIA_E_COLA (HTTP 200)", {
+      httpStatus: created.res.status,
+      responseKeys: Object.keys(raw || {}),
+      dataKeys: Object.keys((raw || {}).data || {}),
+      rawPreview: typeof created.text === "string" ? created.text.slice(0, 1400) : raw,
+      code: externalRef,
+      amount: amountBRL,
+      client_id: mask(CLIENT_ID),
+    })
+  }
 
   return {
     raw,
-    transactionId: txid ? String(txid) : null,
+    transactionId: txid ? String(txid).trim() : null,
     amount: amountBRL,
-    status: raw?.status || raw?.data?.status || null,
-    pixCopiaECola: pixCopiaECola ? String(pixCopiaECola) : null,
+    status: d?.status || raw?.status || null,
+    pixCopiaECola: pixCopiaECola ? String(pixCopiaECola).trim() : null,
     qrCodeBase64: null,
     expiresAt: null,
   }
