@@ -2,6 +2,7 @@
 // ✅ Mantém o mesmo arquivo/nome para não quebrar imports
 // ✅ Integra com MWBank
 // ✅ NÃO trava orderbump
+// ✅ Trata "Unauthorized" mesmo quando MW retorna HTTP 200
 // ✅ Parser blindado contra mudanças do gateway
 
 type CreatePixParams = {
@@ -41,23 +42,29 @@ function withTimeout(ms: number) {
   return { controller, clear: () => clearTimeout(t) }
 }
 
-/* ----------------------------------------------------
-   🔧 NORMALIZA BASE64 (cert_client)
----------------------------------------------------- */
-function normalizeBase64OneLine(value?: string) {
+function normalizeOneLine(value?: string) {
   let v = String(value || "").trim()
   if (!v) return ""
-  // remove aspas e espaços/quebras de linha
   if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
     v = v.slice(1, -1).trim()
   }
   v = v.replace(/[\r\n\s]+/g, "")
-  // aceita base64url e ajusta padding
+  return v
+}
+
+function normalizeBase64Flexible(value?: string) {
+  let v = normalizeOneLine(value)
+  if (!v) return ""
+
+  // aceita base64url
   v = v.replace(/-/g, "+").replace(/_/g, "/")
+
+  // padding
   const mod = v.length % 4
   if (mod === 2) v += "=="
   else if (mod === 3) v += "="
   else if (mod === 1) return ""
+
   try {
     const buf = Buffer.from(v, "base64")
     if (!buf || buf.length === 0) return ""
@@ -112,13 +119,20 @@ function deepFindPixBrCode(obj: any): string | null {
 }
 
 /* ----------------------------------------------------
-   🔑 AUTH / FETCH
+   🔑 ENV
 ---------------------------------------------------- */
 function getEnv() {
   const BASE_URL = (process.env.MWBANK_BASE_URL || "https://core.mwbank.app").replace(/\/+$/, "")
   const CLIENT_ID = (process.env.MWBANK_CLIENT_ID || "").trim()
   const CLIENT_SECRET = (process.env.MWBANK_CLIENT_SECRET || "").trim()
-  const CERT_CLIENT_BASE64 = normalizeBase64OneLine(process.env.MWBANK_CERT_CLIENT)
+
+  const CERT_RAW = normalizeOneLine(process.env.MWBANK_CERT_CLIENT)
+  const CERT_STRIPPED =
+    CERT_RAW.toLowerCase().startsWith("cert_client")
+      ? CERT_RAW.slice("cert_client".length)
+      : CERT_RAW
+
+  const CERT_CLIENT_BASE64 = normalizeBase64Flexible(CERT_STRIPPED)
 
   const SITE_URL = (process.env.SITE_URL || "").replace(/\/+$/, "")
   const DEFAULT_WEBHOOK_URL =
@@ -137,6 +151,9 @@ function getEnv() {
   }
 }
 
+/* ----------------------------------------------------
+   🔑 TOKEN CACHE
+---------------------------------------------------- */
 type CachedToken = { token: string; expiresAt: number }
 let cachedToken: CachedToken | null = null
 let inFlightTokenPromise: Promise<string> | null = null
@@ -163,9 +180,20 @@ async function mwFetch(url: string, init: RequestInit, timeoutMs: number) {
   }
 }
 
-function isUnauthorized(resStatus: number, data: any) {
-  const msg = String(data?.error || data?.message || data?.data?.error || data?.data?.message || "").toLowerCase()
-  return resStatus === 401 || msg.includes("unauthor")
+function payloadMessage(data: any) {
+  return String(
+    data?.error ||
+      data?.message ||
+      data?.data?.error ||
+      data?.data?.message ||
+      "",
+  )
+}
+
+function isUnauthorizedPayload(data: any) {
+  const msg = payloadMessage(data).toLowerCase()
+  // MW veio com "Unathorized" (typo) no seu log:
+  return msg.includes("unauthor") || msg.includes("unathor") || msg.includes("forbidden") || msg.includes("invalid token")
 }
 
 async function getAccessToken() {
@@ -175,12 +203,17 @@ async function getAccessToken() {
 
   inFlightTokenPromise = (async () => {
     const { BASE_URL, CLIENT_ID, CERT_CLIENT_BASE64, TIMEOUT_MS } = getEnv()
-
     if (!CLIENT_ID) throw new Error("MWBANK_CLIENT_ID não configurado")
     if (!CERT_CLIENT_BASE64) throw new Error("MWBANK_CERT_CLIENT inválido/ausente (base64 em 1 linha)")
 
     const url = `${BASE_URL}/auth/token`
-    const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
+
+    // MW pode aceitar:
+    // - base64 puro
+    // - "cert_client" + base64
+    const certModes = Array.from(
+      new Set([CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)),
+    )
 
     let last: any = null
 
@@ -190,13 +223,17 @@ async function getAccessToken() {
         url,
         {
           method: "POST",
-          headers: { Accept: "application/json", client_id: CLIENT_ID, cert_client },
+          headers: {
+            Accept: "application/json",
+            client_id: CLIENT_ID,
+            cert_client,
+          },
         },
         TIMEOUT_MS,
       )
 
       // 2) fallback com JSON vazio
-      if (!last.res.ok) {
+      if (!last.res.ok || isUnauthorizedPayload(last.data) || last.data?.error) {
         last = await mwFetch(
           url,
           {
@@ -219,10 +256,13 @@ async function getAccessToken() {
         last.data?.data?.access_token ||
         null
 
-      if (last.res.ok && token && !last.data?.error) {
+      if (last.res.ok && token && !last.data?.error && !isUnauthorizedPayload(last.data)) {
         const expiresInSecRaw = Number(last.data?.expires_in ?? last.data?.expiresIn ?? 3600)
         const expiresInSec = Number.isFinite(expiresInSecRaw) ? expiresInSecRaw : 3600
-        cachedToken = { token: String(token), expiresAt: Date.now() + Math.max(60, expiresInSec) * 1000 }
+        cachedToken = {
+          token: String(token),
+          expiresAt: Date.now() + Math.max(60, expiresInSec) * 1000,
+        }
         return cachedToken.token
       }
     }
@@ -266,10 +306,14 @@ export async function createPixTransaction(params: CreatePixParams) {
   const body = {
     code: externalRef,
     amount: amountBRL,
-    email: params.customer?.email,
-    document: String(params.customer?.document?.number || "").replace(/\D/g, ""),
+    email: params.customer.email,
+    document: String(params.customer.document.number || "").replace(/\D/g, ""),
     url: postbackUrl,
   }
+
+  const certModes = Array.from(
+    new Set([CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)),
+  )
 
   const doCreate = async (cert_client?: string) => {
     return await mwFetch(
@@ -291,23 +335,53 @@ export async function createPixTransaction(params: CreatePixParams) {
     )
   }
 
-  const certModes = [CERT_CLIENT_BASE64, `cert_client${CERT_CLIENT_BASE64}`].filter(Boolean)
-
+  // ✅ retry inteligente:
+  // - se vier HTTP 401/403 -> retry
+  // - se vier HTTP 200 com {"error":"Unathorized"} -> retry (seu caso)
   let created: any = null
+  let lastUnauthorizedPayload: any = null
+
   for (const cert_client of certModes.length ? certModes : [undefined]) {
     created = await doCreate(cert_client)
 
-    // retry 1x em 401
-    if (!created.res.ok && isUnauthorized(created.res.status, created.data)) {
+    const unauthorized =
+      created?.res?.status === 401 ||
+      created?.res?.status === 403 ||
+      isUnauthorizedPayload(created?.data)
+
+    if (unauthorized) {
+      lastUnauthorizedPayload = created?.data
       invalidateTokenCache()
       accessToken = await getAccessToken()
       created = await doCreate(cert_client)
+
+      const unauthorized2 =
+        created?.res?.status === 401 ||
+        created?.res?.status === 403 ||
+        isUnauthorizedPayload(created?.data)
+
+      if (unauthorized2) {
+        lastUnauthorizedPayload = created?.data
+        continue
+      }
     }
 
-    if (created.res.ok) break
+    // se não for unauthorized e ok, para
+    if (created?.res?.ok && !created?.data?.error) break
   }
 
-  if (!created?.res?.ok) {
+  // Se depois de retries ainda estiver "unauthorized" (mesmo 200), mata aqui com erro explícito
+  if (isUnauthorizedPayload(created?.data)) {
+    console.error("MWBANK PIX UNAUTHORIZED (mesmo HTTP ok):", {
+      httpStatus: created?.res?.status,
+      payload: created?.data,
+      rawPreview: created?.text?.slice(0, 1200),
+      client_id: mask(CLIENT_ID),
+    })
+    throw new Error("MWBANK_UNAUTHORIZED")
+  }
+
+  if (!created?.res?.ok || created?.data?.error) {
     console.error("MWBANK CREATE PIX ERROR:", {
       status: created?.res?.status,
       payload: created?.data,
@@ -317,6 +391,7 @@ export async function createPixTransaction(params: CreatePixParams) {
       client_id: mask(CLIENT_ID),
       has_client_secret: !!CLIENT_SECRET,
       has_cert_client: !!CERT_CLIENT_BASE64,
+      lastUnauthorizedPayload,
     })
     throw new Error("Falha ao gerar PIX (MWBANK)")
   }
@@ -350,19 +425,6 @@ export async function createPixTransaction(params: CreatePixParams) {
     raw?.txid ||
     raw?.transactionId ||
     null
-
-  // ✅ log do caso que te quebra hoje: 200 sem copia e cola
-  if (!pixCopiaECola) {
-    console.error("🚨 MWBANK PIX SEM COPIA_E_COLA (HTTP 200)", {
-      httpStatus: created.res.status,
-      responseKeys: Object.keys(raw || {}),
-      dataKeys: Object.keys((raw || {}).data || {}),
-      rawPreview: typeof created.text === "string" ? created.text.slice(0, 1400) : raw,
-      code: externalRef,
-      amount: amountBRL,
-      client_id: mask(CLIENT_ID),
-    })
-  }
 
   return {
     raw,
