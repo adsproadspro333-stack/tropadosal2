@@ -380,10 +380,17 @@ export async function POST(req: Request) {
     // -------------------------------------------------
     let totalInCents = Number(body?.totalInCents ?? 0)
 
-    if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
-      const rawAmount = body?.amountInCents ?? body?.amount
-      const amountNum = Number(rawAmount)
-      totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
+if (!Number.isFinite(totalInCents) || totalInCents <= 0) {
+  const rawAmount =
+    body?.amountInCents ??
+    body?.amount ??
+    body?.priceCents ??       // ✅ upsell via query
+    body?.valueCents ??       // ✅ fallback extra
+    body?.price ??            // ✅ fallback extra
+    0
+
+  const amountNum = Number(rawAmount)
+  totalInCents = Number.isFinite(amountNum) && amountNum > 0 ? Math.round(amountNum) : 0
     }
 
     if (!totalInCents || totalInCents <= 0) {
