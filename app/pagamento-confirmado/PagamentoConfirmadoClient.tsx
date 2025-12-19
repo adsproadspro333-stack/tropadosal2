@@ -115,6 +115,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState("dominator")
 
+  // ✅ trava clique duplo / spam
   const [upsellSubmittingId, setUpsellSubmittingId] = useState<string | null>(null)
 
   // ⏱️ Timer total (3:30)
@@ -157,18 +158,13 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   }, [orderIdFromSearch])
 
   // ✅ Dispara Purchase no browser (fbq) com dedupe por event_id
-  // ✅ E chama purchase-retry passando o MESMO eventId (para dedupe perfeito com CAPI)
   useEffect(() => {
     if (!order?.id) return
     if (typeof window === "undefined") return
 
     const orderId = String(order.id)
 
-    // ✅ event_id CONSISTENTE:
-    // prioridade 1) order.metaEventId (ideal: vem do backend)
-    // prioridade 2) cache por orderId (pra manter consistência em refresh/back)
-    // prioridade 3) lastFbEventId (se você salvou no /pagamento ao gerar pix)
-    // fallback 4) orderId (último recurso; melhor do que nada)
+    // ✅ event_id CONSISTENTE
     const cachedKey = `metaEventId:${orderId}`
     const cached = (localStorage.getItem(cachedKey) || "").trim()
     const lastFbEventId = (localStorage.getItem("lastFbEventId") || "").trim()
@@ -180,14 +176,12 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         orderId,
     ).trim()
 
-    // guarda pra manter o mesmo event_id em refresh/back
     try {
       if (eventId) localStorage.setItem(cachedKey, eventId)
     } catch {}
 
-    // ✅ dedupe keys (por sessão)
     const sentKey = getStorageKey("fbq_purchase_sent", `${orderId}:${eventId}`)
-    const retryKey = getStorageKey("capi_purchase_retry_called", `${orderId}:${eventId}`)
+    const retryKey = getStorageKey("capi_purchase_retry_called", orderId)
 
     function firePurchaseOnce() {
       try {
@@ -198,7 +192,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         const value = safeNumber(order.amount)
 
-        // ✅ Dedupe com CAPI: eventID precisa ser IGUAL no browser e no CAPI
         window.fbq("track", "Purchase", { value, currency: "BRL" }, { eventID: eventId })
 
         sessionStorage.setItem(sentKey, "1")
@@ -209,22 +202,16 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
     async function retryCapiPurchase() {
       try {
-        // ✅ trava por sessão (refresh/back não fica chamando)
+        // ✅ Só tenta “retry” se NÃO existe metaEventId.
+        if (order.metaEventId) return
+
         const already = sessionStorage.getItem(retryKey)
         if (already) return
-
-        // ✅ dá tempo pro webhook normal enviar primeiro (evita retry desnecessário)
-        // (principalmente em webview/3G)
-        await new Promise((r) => setTimeout(r, 1500))
-
-        // se perdeu o order no meio do caminho, aborta
-        if (!orderId) return
 
         await fetch("/api/meta/purchase-retry", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // ✅ PASSA O MESMO eventId do browser -> CAPI
-          body: JSON.stringify({ orderId, eventId }),
+          body: JSON.stringify({ orderId }),
         })
 
         sessionStorage.setItem(retryKey, "1")
@@ -254,6 +241,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     try {
       if (typeof window === "undefined") return
 
+      // ✅ limpa antes (evita mistura com payload antigo)
       localStorage.removeItem(LS_UPSELL_KEY)
 
       const payload: UpsellCache = {
@@ -262,11 +250,14 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         createdAt: Date.now(),
         baseOrderId: baseOrderId || null,
         optId: opt.optId || null,
-        nonce: (globalThis.crypto as any)?.randomUUID ? (globalThis.crypto as any).randomUUID() : String(Date.now()),
+        nonce: (globalThis.crypto as any)?.randomUUID
+          ? (globalThis.crypto as any).randomUUID()
+          : String(Date.now()),
       }
 
       localStorage.setItem(LS_UPSELL_KEY, JSON.stringify(payload))
 
+      // debug (opcional)
       localStorage.setItem("lastUpsellBaseOrderId", String(baseOrderId || ""))
       localStorage.setItem("lastUpsellPriceCents", String(payload.priceCents))
       localStorage.setItem("lastUpsellQty", String(payload.qty))
@@ -279,13 +270,16 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     if (!order?.id) return
     if (secondsLeft <= 0) return
 
+    // ✅ trava spam/clique duplo
     if (upsellSubmittingId) return
     setUpsellSubmittingId(opt.id)
 
+    // mantém seu store (se você usa em outros lugares)
     try {
       prepareUpsellOrder(opt.qty, opt.priceCents)
     } catch {}
 
+    // 🔥 garante o valor certo SEM depender do store
     persistUpsell({ qty: opt.qty, priceCents: opt.priceCents, optId: opt.id }, order.id)
 
     const qs = new URLSearchParams()
@@ -295,7 +289,28 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     qs.set("priceCents", String(opt.priceCents))
     qs.set("optId", String(opt.id))
 
-    router.push(`/pagamento?${qs.toString()}`)
+    const target = `/pagamento?${qs.toString()}`
+
+    // ✅ Next router (normal)
+    try {
+      router.push(target)
+    } catch {}
+
+    // ✅ Fallback hard (webview/ios/bugs): se não navegou em 250ms, força por location
+    if (typeof window !== "undefined") {
+      setTimeout(() => {
+        if (window.location.pathname.includes("/pagamento-confirmado")) {
+          window.location.href = target
+        }
+      }, 250)
+
+      // ✅ se ainda estiver aqui depois de 2.5s, destrava o botão (pra tentar de novo)
+      setTimeout(() => {
+        if (window.location.pathname.includes("/pagamento-confirmado")) {
+          setUpsellSubmittingId(null)
+        }
+      }, 2500)
+    }
   }
 
   if (loading || !order) {
@@ -411,7 +426,9 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
               </Box>
 
               <Box sx={{ mt: 1.2 }}>
-                <Typography sx={{ fontSize: "0.72rem", color: MUTED, mb: 0.7 }}>Prévia dos seus números</Typography>
+                <Typography sx={{ fontSize: "0.72rem", color: MUTED, mb: 0.7 }}>
+                  Prévia dos seus números
+                </Typography>
 
                 {hasNumbersPreview ? (
                   <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.7 }}>

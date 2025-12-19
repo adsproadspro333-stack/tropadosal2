@@ -44,6 +44,9 @@ const PENDING_TTL_MS = 20 * 60 * 1000 // 20 min
 const LS_UPSELL_KEY = "checkout_upsell_payload_v1"
 const UPSELL_TTL_MS = 10 * 60 * 1000
 
+// ✅ Pós-paid: anti-refresh/anti-voltar do webview (sem mexer no checkout)
+const SS_PAID_PREFIX = "paid_order_v1:" // sessionStorage
+
 type PendingPixCache = {
   orderId: string | null
   baseOrderId?: string | null
@@ -194,6 +197,68 @@ function persistFbcCookieIfMissing(fbc: string) {
 }
 
 // ===============================
+// ✅ Pós-paid helpers
+// ===============================
+function paidKey(orderId: string) {
+  return `${SS_PAID_PREFIX}${String(orderId || "").trim()}`
+}
+
+function markOrderPaidSession(orderId: string | null | undefined) {
+  try {
+    if (typeof window === "undefined") return
+    const id = String(orderId || "").trim()
+    if (!id) return
+    sessionStorage.setItem(paidKey(id), "1")
+  } catch {}
+}
+
+function isOrderPaidSession(orderId: string | null | undefined) {
+  try {
+    if (typeof window === "undefined") return false
+    const id = String(orderId || "").trim()
+    if (!id) return false
+    return sessionStorage.getItem(paidKey(id)) === "1"
+  } catch {
+    return false
+  }
+}
+
+// ===============================
+// ✅ Context-aware: impede pending MAIN travar UPSELL e vice-versa
+// ===============================
+function pendingMatchesContext(opts: {
+  pending: PendingPixCache
+  isUpsell: boolean
+  orderIdFromUrl: string | null
+}) {
+  const p = opts.pending
+  const mode = (p.mode || "main") as "main" | "upsell"
+
+  if (opts.isUpsell) {
+    // Upsell: aceita apenas pending upsell
+    if (mode !== "upsell") return false
+
+    // Se tem orderId na URL, ele representa o BASE orderId do upsell
+    if (opts.orderIdFromUrl) {
+      const base = String(p.baseOrderId || p.orderId || "").trim()
+      if (base && base !== String(opts.orderIdFromUrl).trim()) return false
+    }
+    return true
+  }
+
+  // Main: aceita apenas pending main
+  if (mode !== "main") return false
+
+  // Se tem orderId na URL, tem que bater com o pending
+  if (opts.orderIdFromUrl) {
+    const oid = String(p.orderId || "").trim()
+    if (oid && oid !== String(opts.orderIdFromUrl).trim()) return false
+  }
+
+  return true
+}
+
+// ===============================
 
 export default function PagamentoPage() {
   const router = useRouter()
@@ -251,6 +316,42 @@ export default function PagamentoPage() {
   useEffect(() => {
     setUpsellReady(!isUpsell)
   }, [isUpsell])
+
+  // ✅ IMPORTANTÍSSIMO: não redirecionar "já pagou" quando for UPSELL
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (isUpsell) return
+
+    const paidId = (localStorage.getItem("lastPaidOrderId") || "").trim()
+    const urlOrderId = (orderIdFromUrl || "").trim()
+
+    // ✅ Se já pagou esse pedido e voltou pra /pagamento, manda pro confirmado
+    if (paidId && urlOrderId && paidId === urlOrderId) {
+      router.replace(`/pagamento-confirmado?orderId=${paidId}`)
+    }
+  }, [orderIdFromUrl, router, isUpsell])
+
+  // ✅ HOTFIX pós-paid (sessão): não rodar no UPSELL
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (isUpsell) return
+
+    const candidate =
+      (orderIdFromUrl || "").trim() ||
+      (localStorage.getItem("lastPaidOrderId") || "").trim() ||
+      (localStorage.getItem("lastOrderId") || "").trim() ||
+      ""
+
+    if (!candidate) return
+    if (!isOrderPaidSession(candidate)) return
+
+    // limpa pendência pra não “ressuscitar” pix antigo
+    clearPendingPixCache()
+
+    // redirect rápido e limpo (não polui histórico)
+    router.replace(`/pagamento-confirmado?orderId=${candidate}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router, orderIdFromUrl, isUpsell])
 
   // ✅ Captura fbclid/fbp/fbc no browser
   const clickIds = useMemo(() => {
@@ -383,42 +484,44 @@ export default function PagamentoPage() {
     }
   }, [transactionId])
 
-  // 1) ✅ RESUME SEM DUPLICAR: se existe pending válido, ele manda (não limpa por mismatch)
+  // 1) ✅ RESUME SEM DUPLICAR: se existe pending válido, injeta SOMENTE se for do contexto atual
   useEffect(() => {
     if (typeof window === "undefined") return
 
     const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
     if (!isPendingValid(pending)) return
 
+    // ✅ NÃO injeta pending de MAIN dentro do UPSELL e vice-versa
+    if (!pendingMatchesContext({ pending: pending!, isUpsell, orderIdFromUrl })) return
+
+    // ✅ Se já pagou nessa sessão, não resume PIX (vai direto pra confirmação)
+    const paidCandidate =
+      (pending?.mode === "upsell"
+        ? (pending.baseOrderId || pending.orderId || null)
+        : (pending.orderId || null)) || orderIdFromUrl || null
+
+    if (paidCandidate && !isUpsell && isOrderPaidSession(paidCandidate)) {
+      clearPendingPixCache()
+      router.replace(`/pagamento-confirmado?orderId=${paidCandidate}`)
+      return
+    }
+
     // Se já tem PIX na tela, não sobrescreve
     if (pixPayload && transactionId) return
 
-    // ✅ Proteção anti-mix (upsell x main) com base na URL quando existir
-    if (orderIdFromUrl) {
-      const compareOrder =
-        pending?.mode === "upsell"
-          ? (pending.baseOrderId || pending.orderId || null)
-          : (pending.orderId || null)
-
-      if (compareOrder && orderIdFromUrl !== compareOrder) {
-        // se a URL é de outro fluxo, não injeta
-        return
-      }
-    }
-
-    setResolved({ amount: Number(pending.amount || 0), qty: Number(pending.qty || 0) })
-    setPixPayload(String(pending.pixPayload))
-    setTransactionId(String(pending.transactionId))
-    setOrderId(pending.orderId || orderIdFromUrl || null)
+    setResolved({ amount: Number(pending!.amount || 0), qty: Number(pending!.qty || 0) })
+    setPixPayload(String(pending!.pixPayload))
+    setTransactionId(String(pending!.transactionId))
+    setOrderId(pending!.orderId || orderIdFromUrl || null)
     setError(null)
     setLoading(false)
 
     // ✅ trava geração duplicada (chave de request)
-    if (pending.cacheKey) lastRequestKeyRef.current = String(pending.cacheKey)
+    if (pending?.cacheKey) lastRequestKeyRef.current = String(pending.cacheKey)
 
-    if (pending.mode === "upsell") setUpsellReady(true)
+    if (pending?.mode === "upsell") setUpsellReady(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderIdFromUrl, isUpsell, upsellReady, pixPayload, transactionId])
+  }, [orderIdFromUrl, isUpsell, upsellReady, pixPayload, transactionId, router])
 
   // 2) Se tiver orderId na URL (main), resolve do backend
   useEffect(() => {
@@ -464,10 +567,10 @@ export default function PagamentoPage() {
 
     if (!intended.qty || intended.qty <= 0 || !intended.amount || intended.amount <= 0) return
 
-    // ✅ Prioridade ABSOLUTA: se existe pending válido, usa ele e não gera outro (anti-duplicidade)
+    // ✅ Prioridade ABSOLUTA: se existe pending válido DO MESMO CONTEXTO, usa ele e não gera outro
     if (typeof window !== "undefined") {
       const pending = safeJsonParse<PendingPixCache>(localStorage.getItem(LS_PENDING_KEY))
-      if (isPendingValid(pending)) {
+      if (isPendingValid(pending) && pendingMatchesContext({ pending: pending!, isUpsell, orderIdFromUrl })) {
         setResolved({ amount: Number(pending!.amount || 0), qty: Number(pending!.qty || 0) })
         setPixPayload(String(pending!.pixPayload))
         setTransactionId(String(pending!.transactionId))
@@ -548,6 +651,8 @@ export default function PagamentoPage() {
 
           if (paidOrderId && typeof window !== "undefined") {
             localStorage.setItem("lastPaidOrderId", String(paidOrderId))
+            // ✅ marca pago na sessão pra anti-voltar/refresh
+            markOrderPaidSession(paidOrderId)
           }
 
           if (paidOrderId) {
@@ -687,6 +792,8 @@ export default function PagamentoPage() {
 
       if (finalOrderId && typeof window !== "undefined") {
         localStorage.setItem("lastPaidOrderId", String(finalOrderId))
+        // ✅ marca pago na sessão pra bloquear refresh/voltar cair aqui de novo (apenas main)
+        if (!isUpsell) markOrderPaidSession(finalOrderId)
       }
 
       // ✅ redirect mais rápido e “limpo” (substitui histórico)
