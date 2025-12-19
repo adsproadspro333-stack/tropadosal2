@@ -75,19 +75,13 @@ type UpsellCache = {
   priceCents: number
   createdAt: number
   baseOrderId?: string | null
-
-  // ✅ ajuda a evitar “mistura” de payload antigo (clique/back/refresh)
   optId?: string | null
   nonce?: string | null
 }
 
 function coerceNumbersFromOrder(order: OrderDTO | null) {
   if (!order) return []
-  const raw =
-    (order.numbers as any) ||
-    (order.tickets as any) ||
-    (order.chosenNumbers as any)
-
+  const raw = (order.numbers as any) || (order.tickets as any) || (order.chosenNumbers as any)
   if (!Array.isArray(raw)) return []
   return raw.map((x) => String(x).trim()).filter(Boolean)
 }
@@ -121,7 +115,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState("dominator")
 
-  // ✅ trava clique duplo / spam (causa nº1 de PIX “budar” no upsell)
   const [upsellSubmittingId, setUpsellSubmittingId] = useState<string | null>(null)
 
   // ⏱️ Timer total (3:30)
@@ -164,18 +157,40 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   }, [orderIdFromSearch])
 
   // ✅ Dispara Purchase no browser (fbq) com dedupe por event_id
+  // ✅ E chama purchase-retry passando o MESMO eventId (para dedupe perfeito com CAPI)
   useEffect(() => {
     if (!order?.id) return
+    if (typeof window === "undefined") return
 
-    const eventId = String(order.metaEventId || order.id)
     const orderId = String(order.id)
 
-    const sentKey = getStorageKey("fbq_purchase_sent", orderId)
-    const retryKey = getStorageKey("capi_purchase_retry_called", orderId)
+    // ✅ event_id CONSISTENTE:
+    // prioridade 1) order.metaEventId (ideal: vem do backend)
+    // prioridade 2) cache por orderId (pra manter consistência em refresh/back)
+    // prioridade 3) lastFbEventId (se você salvou no /pagamento ao gerar pix)
+    // fallback 4) orderId (último recurso; melhor do que nada)
+    const cachedKey = `metaEventId:${orderId}`
+    const cached = (localStorage.getItem(cachedKey) || "").trim()
+    const lastFbEventId = (localStorage.getItem("lastFbEventId") || "").trim()
+
+    const eventId = String(
+      (order.metaEventId && String(order.metaEventId).trim()) ||
+        cached ||
+        lastFbEventId ||
+        orderId,
+    ).trim()
+
+    // guarda pra manter o mesmo event_id em refresh/back
+    try {
+      if (eventId) localStorage.setItem(cachedKey, eventId)
+    } catch {}
+
+    // ✅ dedupe keys (por sessão)
+    const sentKey = getStorageKey("fbq_purchase_sent", `${orderId}:${eventId}`)
+    const retryKey = getStorageKey("capi_purchase_retry_called", `${orderId}:${eventId}`)
 
     function firePurchaseOnce() {
       try {
-        if (typeof window === "undefined") return
         if (!window.fbq) return
 
         const already = sessionStorage.getItem(sentKey)
@@ -183,6 +198,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         const value = safeNumber(order.amount)
 
+        // ✅ Dedupe com CAPI: eventID precisa ser IGUAL no browser e no CAPI
         window.fbq("track", "Purchase", { value, currency: "BRL" }, { eventID: eventId })
 
         sessionStorage.setItem(sentKey, "1")
@@ -193,14 +209,22 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
     async function retryCapiPurchase() {
       try {
-        if (typeof window === "undefined") return
+        // ✅ trava por sessão (refresh/back não fica chamando)
         const already = sessionStorage.getItem(retryKey)
         if (already) return
+
+        // ✅ dá tempo pro webhook normal enviar primeiro (evita retry desnecessário)
+        // (principalmente em webview/3G)
+        await new Promise((r) => setTimeout(r, 1500))
+
+        // se perdeu o order no meio do caminho, aborta
+        if (!orderId) return
 
         await fetch("/api/meta/purchase-retry", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ orderId }),
+          // ✅ PASSA O MESMO eventId do browser -> CAPI
+          body: JSON.stringify({ orderId, eventId }),
         })
 
         sessionStorage.setItem(retryKey, "1")
@@ -226,14 +250,10 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const RED = "#DC2626"
   const RED_DARK = "#B91C1C"
 
-  function persistUpsell(
-    opt: { qty: number; priceCents: number; optId?: string },
-    baseOrderId: string,
-  ) {
+  function persistUpsell(opt: { qty: number; priceCents: number; optId?: string }, baseOrderId: string) {
     try {
       if (typeof window === "undefined") return
 
-      // ✅ limpa antes (evita race/back/refresh com payload antigo)
       localStorage.removeItem(LS_UPSELL_KEY)
 
       const payload: UpsellCache = {
@@ -242,12 +262,11 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         createdAt: Date.now(),
         baseOrderId: baseOrderId || null,
         optId: opt.optId || null,
-        nonce: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        nonce: (globalThis.crypto as any)?.randomUUID ? (globalThis.crypto as any).randomUUID() : String(Date.now()),
       }
 
       localStorage.setItem(LS_UPSELL_KEY, JSON.stringify(payload))
 
-      // debug (opcional)
       localStorage.setItem("lastUpsellBaseOrderId", String(baseOrderId || ""))
       localStorage.setItem("lastUpsellPriceCents", String(payload.priceCents))
       localStorage.setItem("lastUpsellQty", String(payload.qty))
@@ -260,21 +279,15 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     if (!order?.id) return
     if (secondsLeft <= 0) return
 
-    // ✅ trava spam/clique duplo
     if (upsellSubmittingId) return
     setUpsellSubmittingId(opt.id)
 
-    // mantém seu store (se você usa em outros lugares)
     try {
       prepareUpsellOrder(opt.qty, opt.priceCents)
     } catch {}
 
-    // 🔥 garante o valor certo SEM depender do store
     persistUpsell({ qty: opt.qty, priceCents: opt.priceCents, optId: opt.id }, order.id)
 
-    // ✅ IMPORTANTÍSSIMO:
-    // Passa também por querystring para o /pagamento NUNCA pegar valor antigo
-    // (/pagamento deve priorizar query > localStorage > store)
     const qs = new URLSearchParams()
     qs.set("upsell", "1")
     qs.set("orderId", String(order.id))

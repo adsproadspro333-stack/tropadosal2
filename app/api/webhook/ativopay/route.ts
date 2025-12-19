@@ -16,7 +16,6 @@ const SITE_URL = (process.env.SITE_URL || "https://favelapremios.plataformapremi
 const PUSHCUT_ORDER_PAID_URL = process.env.PUSHCUT_ORDER_PAID_URL
 
 // 🔒 IMPORTANTÍSSIMO: webhook NUNCA deve devolver 500 pro gateway.
-// Se você devolve 500, muitos gateways param de entregar / marcam como falha.
 const SAFE_OK = () => NextResponse.json({ ok: true }, { status: 200 })
 
 function sha256(value: string) {
@@ -88,7 +87,6 @@ function buildFbcFromFbclid(fbclid?: string, eventTime?: number) {
   return `fb.1.${ts}.${c}`
 }
 
-// ✅ MW: tenta extrair o "code" (que você manda como orderId na criação)
 function extractOrderIdFromTx(tx: any): string | null {
   const candidate =
     tx?.code ||
@@ -104,7 +102,6 @@ function extractOrderIdFromTx(tx: any): string | null {
   return s ? s : null
 }
 
-// ✅ MW: statusTransaction pode vir como "sucesso", "paid", "pago", etc
 function isPaidStatus(tx: any) {
   const raw =
     tx?.statusTransaction ??
@@ -129,7 +126,6 @@ function isPaidStatus(tx: any) {
   )
 }
 
-// ✅ MW: idTransaction/txid é o que tem que bater com Transaction.gatewayId
 function extractGatewayId(tx: any, json: any) {
   const id =
     tx?.idTransaction ||
@@ -147,7 +143,6 @@ function extractGatewayId(tx: any, json: any) {
   return s || null
 }
 
-// ✅ MW: valor pago (em BRL geralmente) — tenta extrair do payload
 function extractPaidValueBRL(tx: any, json: any) {
   const raw =
     tx?.paid_amount ??
@@ -163,18 +158,24 @@ function extractPaidValueBRL(tx: any, json: any) {
 
   const n = Number(raw)
   if (!Number.isFinite(n) || n <= 0) return null
-  // MW costuma mandar em reais, ex: 29.9
   return n
 }
 
-// ✅ MW: normaliza payload (MW varia entre data/payload/pix/flat)
 function extractTx(json: any) {
   return json?.data || json?.payload || json?.pix || json
 }
 
+// ✅ event_id determinístico (o mais importante pro Meta dedupar)
+function buildDeterministicPurchaseEventId(input: {
+  orderMetaEventId?: string | null
+  transactionId: string
+}) {
+  const fromOrder = String(input.orderMetaEventId || "").trim()
+  if (fromOrder) return fromOrder
+  return `purchase_${String(input.transactionId)}`
+}
+
 export async function POST(req: Request) {
-  // ⚠️ regra de ouro: MESMO com erro interno, devolve 200 pro gateway
-  // (pra não virar "pix fantasma")
   try {
     const bodyText = await req.text()
 
@@ -236,8 +237,7 @@ export async function POST(req: Request) {
       })
     }
 
-    // ✅ FIX CRÍTICO: webhook pode chegar ANTES de criar a Transaction.
-    // Se temos orderId (code), cria a transaction "paid" e marca order "paid" de forma atômica.
+    // ✅ webhook pode chegar ANTES de criar a Transaction.
     if (!transaction && orderIdFromCode) {
       const order = await prisma.order.findUnique({
         where: { id: orderIdFromCode },
@@ -249,7 +249,6 @@ export async function POST(req: Request) {
         return SAFE_OK()
       }
 
-      // se já existe alguma transaction paid nessa order, não duplica
       const alreadyPaidTx = order.transactions?.find((t) => t.status === "paid") || null
       if (alreadyPaidTx) {
         console.log("MW WEBHOOK: order já tem transaction paid, ignorando criação:", {
@@ -260,10 +259,7 @@ export async function POST(req: Request) {
         return SAFE_OK()
       }
 
-      const valueToUse =
-        Number(paidValueFromWebhook) ||
-        Number((order as any).amount) ||
-        0
+      const valueToUse = Number(paidValueFromWebhook) || Number((order as any).amount) || 0
 
       try {
         const result = await prisma.$transaction(async (txp) => {
@@ -273,7 +269,6 @@ export async function POST(req: Request) {
               value: valueToUse,
               status: "paid",
               gatewayId: gatewayId || null,
-              // pixCopiaCola pode não vir no webhook — não dependemos disso aqui
               pixCopiaCola: null,
               meta: stringifyMeta({
                 createdBy: "webhook_early_fix",
@@ -304,7 +299,6 @@ export async function POST(req: Request) {
 
         const ack = SAFE_OK()
 
-        // pós-ack: pushcut/capi (sem bloquear)
         if (PUSHCUT_ORDER_PAID_URL) {
           setTimeout(() => {
             ;(async () => {
@@ -323,7 +317,6 @@ export async function POST(req: Request) {
           }, 0)
         }
 
-        // Meta CAPI: mantemos o fluxo normal abaixo (onde temos orderWithUser/meta)
         return ack
       } catch (e) {
         console.error("MW WEBHOOK: falha no early-fix (não bloqueando gateway):", e)
@@ -351,7 +344,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // ✅ Atualiza paid (DB é o núcleo) + garante order paid ATOMICAMENTE
+    // ✅ Atualiza paid (núcleo) + garante order paid ATOMICAMENTE
     let updatedTransaction = transaction
     let updatedOrderId = transaction.orderId
 
@@ -360,11 +353,8 @@ export async function POST(req: Request) {
         let txUpdated = transaction
 
         if (transaction.status !== "paid") {
-          // se webhook trouxe valor pago, podemos atualizar value (sem quebrar se vier null)
           const nextValue =
-            Number(paidValueFromWebhook) && Number(paidValueFromWebhook) > 0
-              ? Number(paidValueFromWebhook)
-              : undefined
+            Number(paidValueFromWebhook) && Number(paidValueFromWebhook) > 0 ? Number(paidValueFromWebhook) : undefined
 
           txUpdated = await txp.transaction.update({
             where: { id: transaction.id },
@@ -409,12 +399,7 @@ export async function POST(req: Request) {
       firstTimePaid: shouldUpdatePaid,
     })
 
-    // ✅ RESPONDE OK PRO GATEWAY AGORA (não bloqueia por Pushcut/Meta)
     const ack = SAFE_OK()
-
-    // ============================
-    // A partir daqui: NÃO BLOQUEIA
-    // ============================
 
     // PUSHCUT (não bloqueia)
     if (PUSHCUT_ORDER_PAID_URL && shouldUpdatePaid) {
@@ -436,7 +421,8 @@ export async function POST(req: Request) {
     }
 
     // META CAPI PURCHASE (não bloqueia)
-    if (FB_PIXEL_ID && FB_CAPI_TOKEN && orderWithUser) {
+    // ✅ Envia CAPI preferencialmente só no "first time paid" (reduz ruído)
+    if (FB_PIXEL_ID && FB_CAPI_TOKEN && orderWithUser && shouldUpdatePaid) {
       setTimeout(() => {
         ;(async () => {
           try {
@@ -447,7 +433,7 @@ export async function POST(req: Request) {
 
             const metaObj = safeJsonParse((txForSignals as any).meta) || {}
 
-            // dedupe
+            // ✅ dedupe interno (nosso)
             if (metaObj?.purchaseSentAt) {
               console.log("META CAPI: Purchase já enviado antes, pulando:", {
                 orderId: updatedOrderId,
@@ -476,7 +462,7 @@ export async function POST(req: Request) {
               if (cpf) userData.external_id = [sha256(cpf)]
             }
 
-            // ✅ Sinais do browser (salvos quando gerou o pix) — fonte primária
+            // ✅ Sinais do browser (salvos quando gerou o pix)
             const uaFromMeta = metaObj?.clientUserAgent || metaObj?.client_user_agent
             const ipFromMeta = metaObj?.clientIpAddress || metaObj?.client_ip_address
             const fbpFromMeta = metaObj?.fbp
@@ -486,14 +472,18 @@ export async function POST(req: Request) {
             if (uaFromMeta) userData.client_user_agent = uaFromMeta
             if (ipFromMeta) userData.client_ip_address = ipFromMeta
 
-            // ✅ NÃO tenta cookies do webhook (não existe). Usa meta do PIX.
             const fbp = fbpFromMeta
             const fbc = fbcFromMeta || buildFbcFromFbclid(fbclidFromMeta, eventTime)
 
             if (fbp) userData.fbp = fbp
             if (fbc) userData.fbc = fbc
 
-            const eventIdFromOrder = (orderWithUser as any).metaEventId || updatedTransaction.id
+            // ✅ EVENT_ID FIXO = base da dedupe do Meta
+            // prioridade: order.metaEventId (se você já salva) -> purchase_${transaction.id}
+            const eventId = buildDeterministicPurchaseEventId({
+              orderMetaEventId: (orderWithUser as any).metaEventId || metaObj?.metaEventId || null,
+              transactionId: updatedTransaction.id,
+            })
 
             const capiBody: any = {
               data: [
@@ -501,7 +491,7 @@ export async function POST(req: Request) {
                   event_name: "Purchase",
                   event_time: eventTime,
                   action_source: "website",
-                  event_id: String(eventIdFromOrder),
+                  event_id: String(eventId),
                   event_source_url: `${SITE_URL}/pagamento-confirmado?orderId=${updatedOrderId}`,
                   custom_data: {
                     currency: "BRL",
@@ -540,9 +530,11 @@ export async function POST(req: Request) {
 
             const mergedMetaBase = {
               ...(metaObj || {}),
+              // ✅ grava o event_id usado (pra você sincronizar com o Pixel do browser também)
+              metaEventId: String(eventId),
               purchaseLastAttemptAt: nowIso2,
               purchaseAttemptCount: attemptNow,
-              capiEventId: String(eventIdFromOrder),
+              capiEventId: String(eventId),
               capiStatus: capiRes.status,
               capiResponse: String(capiText || "").slice(0, 2000),
               purchaseLastError: capiRes.ok ? null : `CAPI_NOT_OK_${capiRes.status}`,

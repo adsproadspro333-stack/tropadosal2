@@ -8,14 +8,10 @@ const FB_PIXEL_ID = process.env.FACEBOOK_PIXEL_ID
 const FB_CAPI_TOKEN = process.env.FACEBOOK_CAPI_TOKEN
 const FB_TEST_EVENT_CODE = process.env.FB_TEST_EVENT_CODE
 
-const SITE_URL =
-  process.env.SITE_URL || "https://favelapremios.plataformapremios.site"
+const SITE_URL = (process.env.SITE_URL || "https://favelapremios.plataformapremios.site").replace(/\/+$/, "")
 
 function sha256(value: string) {
-  return crypto
-    .createHash("sha256")
-    .update(value.trim().toLowerCase())
-    .digest("hex")
+  return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex")
 }
 
 function safeJsonParse(input: any) {
@@ -29,12 +25,20 @@ function safeJsonParse(input: any) {
   }
 }
 
+function stringifyMeta(obj: any) {
+  try {
+    return JSON.stringify(obj ?? {})
+  } catch {
+    return "{}"
+  }
+}
+
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
 }
 
 function normalizePhone(phone: string) {
-  const digits = phone.replace(/\D/g, "")
+  const digits = String(phone || "").replace(/\D/g, "")
   if (!digits) return ""
   if (digits.startsWith("55")) return digits
   if (digits.length >= 10) return `55${digits}`
@@ -42,7 +46,7 @@ function normalizePhone(phone: string) {
 }
 
 function normalizeCpf(cpf: string) {
-  return cpf.replace(/\D/g, "")
+  return String(cpf || "").replace(/\D/g, "")
 }
 
 function getEventTimeFallback(order: any) {
@@ -51,6 +55,20 @@ function getEventTimeFallback(order: any) {
   const t = new Date(raw).getTime()
   if (Number.isNaN(t)) return Math.floor(Date.now() / 1000)
   return Math.floor(t / 1000)
+}
+
+function resolveEventId(order: any, tx: any) {
+  const orderMetaEventId = (order as any)?.metaEventId ? String((order as any).metaEventId).trim() : ""
+  if (orderMetaEventId) return orderMetaEventId
+
+  const metaObj = safeJsonParse((tx as any)?.meta) || {}
+  const capiEventId = metaObj?.capiEventId ? String(metaObj.capiEventId).trim() : ""
+  if (capiEventId) return capiEventId
+
+  const txId = tx?.id ? String(tx.id).trim() : ""
+  if (txId) return txId
+
+  return String(order?.id || "").trim()
 }
 
 export async function POST(req: Request) {
@@ -86,22 +104,47 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, skipped: "order_not_paid" })
     }
 
-    // pega a transação mais recente (idealmente paid)
-    const tx = order.transactions?.[0]
-    if (!tx) {
+    // ✅ pega PAID primeiro (senão, a mais recente)
+    const paidTx =
+      order.transactions?.find((t: any) => String(t.status || "").toLowerCase() === "paid") ||
+      order.transactions?.[0] ||
+      null
+
+    if (!paidTx) {
       return NextResponse.json({ ok: true, skipped: "no_transaction" })
     }
 
-    const metaObj = safeJsonParse((tx as any).meta) || {}
-    const alreadySent = Boolean(metaObj?.purchaseSentAt)
-    if (alreadySent) {
+    const metaObj = safeJsonParse((paidTx as any).meta) || {}
+
+    // ✅ se webhook já marcou como enviado, não reenviar
+    if (metaObj?.purchaseSentAt) {
       return NextResponse.json({ ok: true, skipped: "already_sent" })
     }
 
-    const eventId = String((order as any).metaEventId || tx.id)
+    // ✅ lock simples anti-spam (evita 2 retries simultâneos)
+    const now = Date.now()
+    const lockAt = Number(metaObj?.purchaseRetryLockAt || 0) || 0
+    if (lockAt && now - lockAt < 30_000) {
+      return NextResponse.json({ ok: true, skipped: "retry_locked" })
+    }
+
+    // ✅ marca lock no meta ANTES de chamar CAPI (não bloqueia para sempre)
+    try {
+      await prisma.transaction.update({
+        where: { id: paidTx.id },
+        data: {
+          meta: stringifyMeta({
+            ...(metaObj || {}),
+            purchaseRetryLockAt: now,
+          }),
+        },
+      })
+    } catch {}
+
+    const eventId = resolveEventId(order, paidTx)
     const eventTime = getEventTimeFallback(order)
 
-    const valueNumber = Number((tx as any).value) || Number((order as any).amount) || 0
+    const valueNumber = Number((paidTx as any).value) || Number((order as any).amount) || 0
 
     const userData: any = {}
     if (order.user?.email) userData.em = [sha256(normalizeEmail(order.user.email))]
@@ -171,22 +214,24 @@ export async function POST(req: Request) {
       ...(metaObj || {}),
       purchaseLastAttemptAt: nowIso,
       purchaseAttemptCount: attemptNow,
-      capiEventId: eventId,
+      capiEventId: String(eventId),
       capiStatus: res.status,
-      capiResponse: text?.slice(0, 2000),
+      capiResponse: String(text || "").slice(0, 2000),
       purchaseLastError: res.ok ? null : `CAPI_NOT_OK_${res.status}`,
+      purchaseRetryLockAt: null, // ✅ solta o lock
       ...(res.ok ? { purchaseSentAt: nowIso } : {}),
     }
 
     await prisma.transaction.update({
-      where: { id: tx.id },
-      data: { meta: mergedMeta as any },
+      where: { id: paidTx.id },
+      data: { meta: stringifyMeta(mergedMeta) },
     })
 
     return NextResponse.json({
       ok: true,
       sent: Boolean(res.ok),
       status: res.status,
+      eventId,
     })
   } catch (err: any) {
     console.error("purchase-retry error:", err)
