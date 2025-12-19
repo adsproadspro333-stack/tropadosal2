@@ -159,6 +159,29 @@ function statusChip(status: string) {
   )
 }
 
+// ===============================
+// ✅ DASH ONLY: ocultar transações localmente (sem DB)
+// ===============================
+const LS_HIDDEN_TX_KEY = "dash_hidden_tx_ids_v1"
+
+function readHiddenTxIds(): string[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = localStorage.getItem(LS_HIDDEN_TX_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function writeHiddenTxIds(ids: string[]) {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(LS_HIDDEN_TX_KEY, JSON.stringify(Array.from(new Set(ids.map(String)))))
+  } catch {}
+}
+
 export default function DashPage() {
   const [range, setRange] = useState<"today" | "24h" | "all">("today")
   const [status, setStatus] = useState<"all" | "pending" | "paid" | "failed">("all")
@@ -179,13 +202,45 @@ export default function DashPage() {
   const [errTop, setErrTop] = useState<string | null>(null)
   const [errList, setErrList] = useState<string | null>(null)
 
-  // Somatórios da lista (por página / filtro atual)
+  // ✅ hidden state (dash-only)
+  const [hiddenTxIds, setHiddenTxIds] = useState<string[]>([])
+  const [showHidden, setShowHidden] = useState(false)
+
+  useEffect(() => {
+    setHiddenTxIds(readHiddenTxIds())
+  }, [])
+
+  const hiddenSet = useMemo(() => new Set(hiddenTxIds), [hiddenTxIds])
+
+  const hideTx = (id: string) => {
+    const key = String(id || "").trim()
+    if (!key) return
+    setHiddenTxIds((prev) => {
+      const next = Array.from(new Set([...prev, key]))
+      writeHiddenTxIds(next)
+      return next
+    })
+  }
+
+  const unhideAll = () => {
+    setHiddenTxIds([])
+    writeHiddenTxIds([])
+  }
+
+  // lista visível (por página/filtro atual) — aplica “hide”
+  const visibleRows = useMemo(() => {
+    const base = rows || []
+    if (showHidden) return base
+    return base.filter((r) => !hiddenSet.has(String(r.transactionId)))
+  }, [rows, showHidden, hiddenSet])
+
+  // Somatórios da lista (por página / filtro atual) — agora usa visibleRows
   const listTotals = useMemo(() => {
     let paid = 0
     let pending = 0
     let totalSum = 0
 
-    for (const r of rows) {
+    for (const r of visibleRows) {
       const v = Number(r.value || 0)
       totalSum += v
       const st = String(r.status || "").toLowerCase()
@@ -194,7 +249,7 @@ export default function DashPage() {
     }
 
     return { paid, pending, total: totalSum }
-  }, [rows])
+  }, [visibleRows])
 
   // ✅ sempre que mudar filtro/limite, volta pra página 1
   useEffect(() => {
@@ -239,7 +294,6 @@ export default function DashPage() {
       setTotal(Number(data?.total || 0))
       setPages(Math.max(1, Number(data?.pages || 1)))
 
-      // se a API “corrigir” page, acompanha
       const apiPage = Math.max(1, Number(data?.page || 1))
       if (apiPage !== page) setPage(apiPage)
     } catch (e: any) {
@@ -471,7 +525,7 @@ export default function DashPage() {
             </Stack>
           </Paper>
 
-          {/* Lista/Tabela com scroll interno + paginação numérica */}
+          {/* Lista/Tabela */}
           <Paper
             elevation={0}
             sx={{
@@ -482,14 +536,48 @@ export default function DashPage() {
               overflow: "hidden",
             }}
           >
-            <Box sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <Box sx={{ p: 2, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
               <Typography sx={{ color: "#fff", fontWeight: 950 }}>Transações</Typography>
-              {loadingList && (
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <CircularProgress size={18} sx={{ color: "rgba(255,255,255,0.75)" }} />
-                  <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.85rem" }}>Carregando…</Typography>
-                </Stack>
-              )}
+
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Button
+                  onClick={() => setShowHidden((v) => !v)}
+                  variant="outlined"
+                  size="small"
+                  sx={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    color: "rgba(255,255,255,0.85)",
+                    textTransform: "none",
+                    fontWeight: 900,
+                    borderRadius: 999,
+                  }}
+                >
+                  {showHidden ? "Ocultar removidas" : `Mostrar removidas (${hiddenTxIds.length})`}
+                </Button>
+
+                <Button
+                  onClick={unhideAll}
+                  disabled={hiddenTxIds.length === 0}
+                  variant="outlined"
+                  size="small"
+                  sx={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    color: "rgba(255,255,255,0.85)",
+                    textTransform: "none",
+                    fontWeight: 900,
+                    borderRadius: 999,
+                  }}
+                >
+                  Restaurar tudo
+                </Button>
+
+                {loadingList && (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <CircularProgress size={18} sx={{ color: "rgba(255,255,255,0.75)" }} />
+                    <Typography sx={{ color: "rgba(255,255,255,0.65)", fontSize: "0.85rem" }}>Carregando…</Typography>
+                  </Stack>
+                )}
+              </Stack>
             </Box>
 
             {errList ? (
@@ -533,15 +621,23 @@ export default function DashPage() {
                     </TableHead>
 
                     <TableBody>
-                      {rows.length === 0 && !loadingList ? (
+                      {visibleRows.length === 0 && !loadingList ? (
                         <TableRow>
                           <TableCell colSpan={10} sx={{ color: "rgba(255,255,255,0.65)" }}>
                             Nenhuma transação encontrada.
                           </TableCell>
                         </TableRow>
                       ) : (
-                        rows.map((r) => (
-                          <TableRow key={r.transactionId} hover>
+                        visibleRows.map((r) => (
+                          <TableRow
+                            key={r.transactionId}
+                            hover
+                            sx={
+                              showHidden && hiddenSet.has(String(r.transactionId))
+                                ? { opacity: 0.55 }
+                                : undefined
+                            }
+                          >
                             <TableCell
                               sx={{
                                 color: "rgba(255,255,255,0.85)",
@@ -602,7 +698,7 @@ export default function DashPage() {
                               {r.gatewayId || "—"}
                             </TableCell>
 
-                            <TableCell align="right" sx={{ minWidth: 110 }}>
+                            <TableCell align="right" sx={{ minWidth: 140 }}>
                               <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                                 <Tooltip title="Copiar OrderId">
                                   <IconButton
@@ -613,6 +709,7 @@ export default function DashPage() {
                                     <Icon icon="mdi:content-copy" width={18} />
                                   </IconButton>
                                 </Tooltip>
+
                                 <Tooltip title="Copiar GatewayId">
                                   <span>
                                     <IconButton
@@ -625,6 +722,23 @@ export default function DashPage() {
                                     </IconButton>
                                   </span>
                                 </Tooltip>
+
+                                <Tooltip title="Ocultar do meu dashboard (não apaga do sistema)">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => hideTx(r.transactionId)}
+                                      sx={{
+                                        color: "rgba(255,255,255,0.75)",
+                                        border: "1px solid rgba(255,255,255,0.10)",
+                                        borderRadius: 999,
+                                        px: 0.25,
+                                      }}
+                                    >
+                                      <Icon icon="mdi:close" width={18} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
                               </Stack>
                             </TableCell>
                           </TableRow>
@@ -634,7 +748,7 @@ export default function DashPage() {
                   </Table>
                 </TableContainer>
 
-                {/* ✅ paginação numérica (fora do scroll da tabela) */}
+                {/* paginação */}
                 {pages > 1 && (
                   <Box
                     sx={{
