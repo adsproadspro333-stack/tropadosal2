@@ -39,7 +39,7 @@ type OrderDTO = {
 const UPSELL_OPTIONS = [
   {
     id: "turbo",
-    label: "10x Mais Sorte",
+    label: "Aumentar 10X a sorte",
     qty: 100,
     priceCents: 990,
     note: "Adicione números extras agora, sem refazer pagamento.",
@@ -48,7 +48,7 @@ const UPSELL_OPTIONS = [
   },
   {
     id: "elite",
-    label: "20x Mais Sorte",
+    label: "Aumentar 20X a sorte",
     qty: 200,
     priceCents: 1990,
     note: "Mais chances com melhor custo-benefício do dia.",
@@ -57,7 +57,7 @@ const UPSELL_OPTIONS = [
   },
   {
     id: "dominator",
-    label: "50x Mais Sorte",
+    label: "Aumentar 50X a sorte",
     qty: 300,
     priceCents: 3990,
     note: "Pacote forte pra quem quer entrar pesado no sorteio.",
@@ -73,6 +73,10 @@ const UPSELL_TTL_MS = 10 * 60 * 1000
 // ✅ Mesmas chaves usadas no /pagamento
 const LS_PENDING_KEY = "pix_pending_payload_v1"
 const SS_PAID_PREFIX = "paid_order_v1:" // sessionStorage
+
+// ✅ Gate Minhas Compras (sessão)
+const SS_MINHAS_GATE_PREFIX = "pc_gate_minhas_v1:" // sessionStorage
+const MINHAS_COMPRAS_PATH = "/compras"
 
 type UpsellCache = {
   qty: number
@@ -124,6 +128,26 @@ function clearPendingPixCache() {
   } catch {}
 }
 
+function gateKey(orderId: string) {
+  return `${SS_MINHAS_GATE_PREFIX}${String(orderId || "").trim()}`
+}
+
+function getMinhasGate(orderId: string) {
+  try {
+    if (typeof window === "undefined") return false
+    return sessionStorage.getItem(gateKey(orderId)) === "1"
+  } catch {
+    return false
+  }
+}
+
+function setMinhasGate(orderId: string) {
+  try {
+    if (typeof window === "undefined") return
+    sessionStorage.setItem(gateKey(orderId), "1")
+  } catch {}
+}
+
 // Tipagem mínima do fbq sem depender de lib
 declare global {
   interface Window {
@@ -144,6 +168,10 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
   // ✅ evita “voltar pro front e disparar fluxo novo”
   const antiNavArmedRef = useRef(false)
+
+  // ✅ refs pra scroll / destaque
+  const upsellRef = useRef<HTMLDivElement | null>(null)
+  const [flashUpsell, setFlashUpsell] = useState(false)
 
   // ⏱️ Timer total (3:30)
   const TOTAL_TIME = 210
@@ -173,7 +201,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         if (!orderId) {
           setLoading(false)
-          // Sem orderId, volta pro início (ou troque por /minhas-compras se tiver)
           router.replace("/")
           return
         }
@@ -202,7 +229,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
         if (!res.ok || !data?.id) {
           setLoading(false)
-          // Se falhar, ao menos mantém o pós-pago sem quebrar
           setOrder({ id: String(orderId), amount: 0, quantity: 0 } as any)
           return
         }
@@ -222,7 +248,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     if (typeof window === "undefined") return
     if (!order?.id) return
 
-    // arma 1x
     if (!antiNavArmedRef.current) {
       antiNavArmedRef.current = true
       try {
@@ -231,13 +256,11 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     }
 
     const onPopState = () => {
-      // segura o usuário aqui (evita cair na home pelo back)
       try {
         window.history.pushState({ __paid_ok: true }, "", window.location.href)
       } catch {}
     }
 
-    // evita saída “sem querer” em alguns webviews
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       e.returnValue = ""
@@ -260,7 +283,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
     const orderId = String(order.id)
 
-    // ✅ event_id CONSISTENTE
     const cachedKey = `metaEventId:${orderId}`
     const cached = (localStorage.getItem(cachedKey) || "").trim()
     const lastFbEventId = (localStorage.getItem("lastFbEventId") || "").trim()
@@ -295,7 +317,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
     async function retryCapiPurchase() {
       try {
-        // ✅ Só tenta “retry” se NÃO existe metaEventId.
         if (order.metaEventId) return
 
         const already = sessionStorage.getItem(retryKey)
@@ -334,7 +355,6 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     try {
       if (typeof window === "undefined") return
 
-      // ✅ limpa antes (evita mistura com payload antigo)
       localStorage.removeItem(LS_UPSELL_KEY)
 
       const payload: UpsellCache = {
@@ -363,16 +383,13 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     if (!order?.id) return
     if (secondsLeft <= 0) return
 
-    // ✅ trava spam/clique duplo
     if (upsellSubmittingId) return
     setUpsellSubmittingId(opt.id)
 
-    // mantém seu store (se você usa em outros lugares)
     try {
       prepareUpsellOrder(opt.qty, opt.priceCents)
     } catch {}
 
-    // 🔥 garante o valor certo SEM depender do store
     persistUpsell({ qty: opt.qty, priceCents: opt.priceCents, optId: opt.id }, order.id)
 
     const qs = new URLSearchParams()
@@ -384,14 +401,12 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
     const target = `/pagamento?${qs.toString()}`
 
-    // ✅ Next router (normal)
     let pushed = false
     try {
       router.push(target)
       pushed = true
     } catch {}
 
-    // ✅ Fallback hard (webview/ios/bugs): força por location
     if (typeof window !== "undefined") {
       setTimeout(() => {
         if (window.location.pathname.includes("/pagamento-confirmado")) {
@@ -399,13 +414,40 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
         }
       }, pushed ? 180 : 50)
 
-      // ✅ se ainda estiver aqui depois de 2.5s, destrava o botão (pra tentar de novo)
       setTimeout(() => {
         if (window.location.pathname.includes("/pagamento-confirmado")) {
           setUpsellSubmittingId(null)
         }
       }, 2500)
     }
+  }
+
+  function scrollToUpsell() {
+    try {
+      upsellRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+    } catch {}
+    setFlashUpsell(true)
+    setTimeout(() => setFlashUpsell(false), 1200)
+  }
+
+  function handleMinhasComprasClick() {
+    if (!order?.id) {
+      router.push(MINHAS_COMPRAS_PATH)
+      return
+    }
+
+    const id = String(order.id)
+    const alreadyGated = getMinhasGate(id)
+
+    if (!alreadyGated) {
+      // ✅ 1º clique: força o upsell
+      setMinhasGate(id)
+      scrollToUpsell()
+      return
+    }
+
+    // ✅ 2º clique: libera Minhas Compras
+    router.push(MINHAS_COMPRAS_PATH)
   }
 
   if (loading || !order) {
@@ -434,7 +476,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
           "radial-gradient(1200px 600px at 20% 10%, rgba(34,197,94,0.14), transparent 60%), radial-gradient(900px 500px at 90% 0%, rgba(220,38,38,0.10), transparent 55%)",
       }}
     >
-      <Container maxWidth="sm" sx={{ py: { xs: 2.5, sm: 4 } }}>
+      <Container maxWidth="sm" sx={{ py: { xs: 2.2, sm: 4 } }}>
         {/* ✅ CONFIRMAÇÃO */}
         <Paper
           elevation={0}
@@ -481,8 +523,11 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
             Pagamento aprovado ✅
           </Typography>
 
-          <Typography sx={{ mt: 0.5, color: MUTED, fontSize: "0.85rem" }}>
-            Seus números já estão concorrendo. Guarde seu comprovante e acompanhe em “Minhas compras”.
+          <Typography sx={{ mt: 0.55, color: MUTED, fontSize: "0.86rem" }}>
+            Seus números já estão concorrendo.
+            <br />
+            <strong style={{ color: "rgba(255,255,255,0.92)" }}>Atenção:</strong> se você sair dessa tela, não tem problema —
+            seu pedido já foi confirmado.
           </Typography>
 
           <Accordion
@@ -560,36 +605,63 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                   </Typography>
                 )}
               </Box>
+
+              {/* ✅ BOTÃO “VER MINHAS COMPRAS” (com gate pro upsell) */}
+              <Button
+                fullWidth
+                onClick={handleMinhasComprasClick}
+                sx={{
+                  mt: 1.6,
+                  borderRadius: 2,
+                  py: 1.05,
+                  textTransform: "none",
+                  fontWeight: 1000,
+                  bgcolor: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.14)",
+                  color: "rgba(255,255,255,0.92)",
+                  "&:hover": { bgcolor: "rgba(255,255,255,0.09)" },
+                }}
+              >
+                Ver Minhas Compras
+              </Button>
+
+              <Typography sx={{ mt: 0.7, fontSize: "0.74rem", color: "rgba(255,255,255,0.52)", textAlign: "center" }}>
+                Dica: no primeiro clique a gente te mostra uma oferta rápida pra aumentar suas chances.
+              </Typography>
             </AccordionDetails>
           </Accordion>
         </Paper>
 
-        {/* ✅ UPSELL */}
+        {/* ✅ UPSELL (FOCO TOTAL) */}
         <Paper
+          ref={upsellRef}
           elevation={0}
           sx={{
             p: 2.4,
             borderRadius: 3,
-            mb: 2.2,
+            mb: 0, // ✅ nada depois
             bgcolor: GLASS,
-            border: `1px solid ${BORDER}`,
+            border: flashUpsell ? "2px solid rgba(220,38,38,0.65)" : `1px solid ${BORDER}`,
             backdropFilter: "blur(10px)",
-            boxShadow: "0 18px 42px rgba(0,0,0,0.30)",
+            boxShadow: flashUpsell ? "0 0 0 6px rgba(220,38,38,0.12)" : "0 18px 42px rgba(0,0,0,0.30)",
+            transition: "border-color 220ms ease, box-shadow 220ms ease",
           }}
         >
-          <Typography sx={{ fontWeight: 1000, color: "#fff", fontSize: "1.02rem" }}>
-            Última chance antes do sorteio
+          <Typography sx={{ fontWeight: 1000, color: "#fff", fontSize: "1.06rem", lineHeight: 1.2 }}>
+            É a sua última chance{" "}
+            <span style={{ color: "rgba(255,255,255,0.72)" }}>(sem refazer pagamento)</span>
           </Typography>
-          <Typography sx={{ color: MUTED, fontSize: "0.82rem", mt: 0.35 }}>
-            A maioria dos ganhadores entra com mais de um pacote. Garanta mais chances agora.
+
+          <Typography sx={{ color: MUTED, fontSize: "0.83rem", mt: 0.45 }}>
+            Isso cria um <strong style={{ color: "#fff" }}>PIX extra</strong> só para adicionar mais números no seu pedido.
           </Typography>
 
           {/* TIMER */}
           <Box
             sx={{
               mt: 1.6,
-              mb: 1.8,
-              p: 1.2,
+              mb: 1.7,
+              p: 1.15,
               borderRadius: 2,
               bgcolor: "rgba(42,14,14,0.85)",
               border: `1px solid ${RED}`,
@@ -601,12 +673,12 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                 textAlign: "center",
                 fontSize: "0.75rem",
                 fontWeight: 1000,
-                color: "rgba(255,255,255,0.86)",
-                mb: 0.7,
-                letterSpacing: 0.4,
+                color: "rgba(255,255,255,0.88)",
+                mb: 0.75,
+                letterSpacing: 0.3,
               }}
             >
-              ⏳ OFERTA EXPIRA EM{" "}
+              Oferta disponível por{" "}
               <span style={{ color: "#FF4D4D" }}>
                 {minutes}:{seconds}
               </span>
@@ -624,10 +696,28 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
             </Box>
           </Box>
 
-          <Box sx={{ display: "grid", gap: 1.2 }}>
+          {/* ✅ animações globais */}
+          <Box
+            sx={{
+              "@keyframes pulseCTA": {
+                "0%": { transform: "scale(1)", boxShadow: "0 0 0 0 rgba(220,38,38,0.55)" },
+                "60%": { transform: "scale(1.01)", boxShadow: "0 0 0 14px rgba(220,38,38,0)" },
+                "100%": { transform: "scale(1)", boxShadow: "0 0 0 0 rgba(220,38,38,0)" },
+              },
+              "@keyframes glowCard": {
+                "0%": { filter: "brightness(1)" },
+                "50%": { filter: "brightness(1.05)" },
+                "100%": { filter: "brightness(1)" },
+              },
+            }}
+          />
+
+          <Box sx={{ display: "grid", gap: 1.15 }}>
             {UPSELL_OPTIONS.map((opt) => {
               const active = selected === opt.id
               const isDominator = opt.id === "dominator"
+              const busy = upsellSubmittingId === opt.id
+              const anyBusy = !!upsellSubmittingId
 
               const badgeStyles =
                 opt.badgeTone === "green"
@@ -640,7 +730,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     ? {
                         bgcolor: "rgba(220,38,38,0.14)",
                         border: "1px solid rgba(220,38,38,0.22)",
-                        color: "rgba(255,255,255,0.90)",
+                        color: "rgba(255,255,255,0.92)",
                       }
                     : {
                         bgcolor: "rgba(255,255,255,0.08)",
@@ -648,20 +738,18 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         color: "rgba(255,255,255,0.86)",
                       }
 
-              const busy = upsellSubmittingId === opt.id
-
               return (
                 <Box
                   key={opt.id}
                   onClick={() => setSelected(opt.id)}
                   sx={{
-                    borderRadius: 2.5,
+                    borderRadius: 2.6,
                     p: 2,
                     cursor: "pointer",
                     border: active ? `2px solid ${RED}` : "1px solid rgba(255,255,255,0.10)",
                     bgcolor: active
-                      ? opt.id === "dominator"
-                        ? "rgba(26,7,7,0.90)"
+                      ? isDominator
+                        ? "linear-gradient(180deg, rgba(40,10,10,0.92), rgba(15,8,10,0.92))"
                         : "rgba(220,38,38,0.10)"
                       : "rgba(255,255,255,0.04)",
                     transition:
@@ -669,10 +757,11 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                     transform: active ? "translateY(-1px)" : "translateY(0)",
                     boxShadow: active ? "0 16px 40px rgba(220,38,38,0.22)" : "0 10px 26px rgba(0,0,0,0.25)",
                     overflow: "hidden",
-                    opacity: upsellSubmittingId && !busy ? 0.85 : 1,
+                    opacity: anyBusy && !busy ? 0.86 : 1,
+                    ...(isDominator ? { animation: "glowCard 2.2s ease-in-out infinite" } : {}),
                   }}
                 >
-                  <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1.5 }}>
+                  <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1.4 }}>
                     <Box sx={{ minWidth: 0 }}>
                       <Typography sx={{ fontWeight: 1000, color: "#fff", lineHeight: 1.1 }}>
                         {opt.label}
@@ -680,16 +769,16 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
                       <Typography
                         sx={{
-                          mt: 0.55,
-                          fontSize: "0.82rem",
+                          mt: 0.5,
+                          fontSize: "0.84rem",
                           fontWeight: 1000,
-                          color: "rgba(255,255,255,0.88)",
+                          color: "rgba(255,255,255,0.90)",
                         }}
                       >
                         {formatQtyLabel(opt.qty)}
                       </Typography>
 
-                      <Box sx={{ mt: 0.8, display: "flex", gap: 0.7, flexWrap: "wrap" }}>
+                      <Box sx={{ mt: 0.75, display: "flex", gap: 0.7, flexWrap: "wrap" }}>
                         <Box
                           sx={{
                             px: 1.1,
@@ -703,15 +792,32 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
                         >
                           {opt.badge}
                         </Box>
+
+                        {isDominator && (
+                          <Box
+                            sx={{
+                              px: 1.1,
+                              py: 0.35,
+                              borderRadius: 999,
+                              fontSize: "0.70rem",
+                              fontWeight: 1000,
+                              bgcolor: "rgba(255,255,255,0.08)",
+                              border: "1px solid rgba(255,255,255,0.14)",
+                              color: "rgba(255,255,255,0.86)",
+                            }}
+                          >
+                            Maior impacto
+                          </Box>
+                        )}
                       </Box>
                     </Box>
 
                     <Typography
                       sx={{
                         fontWeight: 1000,
-                        color: RED,
+                        color: "#FF4D4D",
                         whiteSpace: "nowrap",
-                        fontSize: "0.98rem",
+                        fontSize: "1.0rem",
                       }}
                     >
                       {formatBRL(opt.priceCents / 100)}
@@ -720,39 +826,34 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
                   <Typography sx={{ fontSize: "0.78rem", color: MUTED, mt: 0.9 }}>{opt.note}</Typography>
 
-                  {active && (
-                    <Button
-                      fullWidth
-                      disabled={secondsLeft <= 0 || !!upsellSubmittingId}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        goToUpsellPayment({ id: opt.id, qty: opt.qty, priceCents: opt.priceCents })
-                      }}
-                      sx={{
-                        mt: 1.5,
-                        borderRadius: 999,
-                        bgcolor: RED,
-                        color: "#FFFFFF",
-                        fontWeight: 1000,
-                        py: 1.05,
-                        textTransform: "none",
-                        boxShadow: "0 16px 34px rgba(220,38,38,0.28)",
-                        animation: isDominator ? "pulseRed 1.6s ease-out infinite" : "none",
-                        "@keyframes pulseRed": {
-                          "0%": { boxShadow: "0 0 0 0 rgba(220,38,38,0.55)" },
-                          "70%": { boxShadow: "0 0 0 14px rgba(220,38,38,0)" },
-                          "100%": { boxShadow: "0 0 0 0 rgba(220,38,38,0)" },
-                        },
-                        "&:hover": { bgcolor: RED_DARK },
-                        "&.Mui-disabled": {
-                          bgcolor: "rgba(220,38,38,0.35)",
-                          color: "rgba(255,255,255,0.7)",
-                        },
-                      }}
-                    >
-                      {busy ? "Gerando PIX..." : `Adicionar ${formatQtyLabel(opt.qty)} agora`}
-                    </Button>
-                  )}
+                  {/* ✅ CTA SEMPRE VISÍVEL (pulse em todos) */}
+                  <Button
+                    fullWidth
+                    disabled={secondsLeft <= 0 || anyBusy}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      goToUpsellPayment({ id: opt.id, qty: opt.qty, priceCents: opt.priceCents })
+                    }}
+                    sx={{
+                      mt: 1.35,
+                      borderRadius: 999,
+                      bgcolor: RED,
+                      color: "#FFFFFF",
+                      fontWeight: 1000,
+                      py: 1.12,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      boxShadow: "0 16px 34px rgba(220,38,38,0.28)",
+                      animation: secondsLeft > 0 ? "pulseCTA 1.55s ease-out infinite" : "none",
+                      "&:hover": { bgcolor: RED_DARK, transform: "translateY(-1px)" },
+                      "&.Mui-disabled": {
+                        bgcolor: "rgba(220,38,38,0.35)",
+                        color: "rgba(255,255,255,0.7)",
+                      },
+                    }}
+                  >
+                    {busy ? "Gerando PIX..." : opt.label}
+                  </Button>
                 </Box>
               )
             })}
@@ -760,13 +861,13 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
 
           <Typography
             sx={{
-              mt: 1.4,
+              mt: 1.25,
               textAlign: "center",
               fontSize: "0.76rem",
               color: "rgba(255,255,255,0.58)",
             }}
           >
-            Essa oferta não aparecerá novamente.
+            Dica: se você sair dessa página, essa oferta pode não aparecer novamente.
           </Typography>
         </Paper>
       </Container>
