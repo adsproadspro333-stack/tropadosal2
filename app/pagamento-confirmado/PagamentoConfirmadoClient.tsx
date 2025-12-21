@@ -1,7 +1,7 @@
 // app/pagamento-confirmado/PagamentoConfirmadoClient.tsx
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import {
   Box,
@@ -70,6 +70,10 @@ const UPSELL_OPTIONS = [
 const LS_UPSELL_KEY = "checkout_upsell_payload_v1"
 const UPSELL_TTL_MS = 10 * 60 * 1000
 
+// ✅ Mesmas chaves usadas no /pagamento
+const LS_PENDING_KEY = "pix_pending_payload_v1"
+const SS_PAID_PREFIX = "paid_order_v1:" // sessionStorage
+
 type UpsellCache = {
   qty: number
   priceCents: number
@@ -100,6 +104,26 @@ function getStorageKey(prefix: string, orderId: string) {
   return `${prefix}:${orderId}`
 }
 
+function paidKey(orderId: string) {
+  return `${SS_PAID_PREFIX}${String(orderId || "").trim()}`
+}
+
+function markOrderPaidSession(orderId: string | null | undefined) {
+  try {
+    if (typeof window === "undefined") return
+    const id = String(orderId || "").trim()
+    if (!id) return
+    sessionStorage.setItem(paidKey(id), "1")
+  } catch {}
+}
+
+function clearPendingPixCache() {
+  try {
+    if (typeof window === "undefined") return
+    localStorage.removeItem(LS_PENDING_KEY)
+  } catch {}
+}
+
 // Tipagem mínima do fbq sem depender de lib
 declare global {
   interface Window {
@@ -118,6 +142,9 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   // ✅ trava clique duplo / spam
   const [upsellSubmittingId, setUpsellSubmittingId] = useState<string | null>(null)
 
+  // ✅ evita “voltar pro front e disparar fluxo novo”
+  const antiNavArmedRef = useRef(false)
+
   // ⏱️ Timer total (3:30)
   const TOTAL_TIME = 210
   const [secondsLeft, setSecondsLeft] = useState(TOTAL_TIME)
@@ -133,29 +160,98 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
   const seconds = String(secondsLeft % 60).padStart(2, "0")
   const progress = (secondsLeft / TOTAL_TIME) * 100
 
+  // ✅ 1) Resolve orderId e "ancora" o pós-pago + limpa pendências
   useEffect(() => {
     async function load() {
-      const orderId =
-        orderIdFromSearch ||
-        localStorage.getItem("lastPaidOrderId") ||
-        localStorage.getItem("lastOrderId")
+      try {
+        if (typeof window === "undefined") return
 
-      if (!orderId) {
+        const orderId =
+          orderIdFromSearch ||
+          localStorage.getItem("lastPaidOrderId") ||
+          localStorage.getItem("lastOrderId")
+
+        if (!orderId) {
+          setLoading(false)
+          // Sem orderId, volta pro início (ou troque por /minhas-compras se tiver)
+          router.replace("/")
+          return
+        }
+
+        // ✅ âncora forte
+        localStorage.setItem("lastPaidOrderId", String(orderId))
+        markOrderPaidSession(String(orderId))
+
+        // ✅ limpa pendência de PIX pra não “ressuscitar”
+        clearPendingPixCache()
+
+        // ✅ também “zera” qualquer upsell velho (não atrapalha um novo clique)
+        try {
+          const raw = localStorage.getItem(LS_UPSELL_KEY)
+          if (raw) {
+            const parsed = JSON.parse(raw)
+            const createdAt = Number(parsed?.createdAt || 0)
+            if (!createdAt || Date.now() - createdAt > UPSELL_TTL_MS) {
+              localStorage.removeItem(LS_UPSELL_KEY)
+            }
+          }
+        } catch {}
+
+        const res = await fetch(`/api/orders/${orderId}`, { cache: "no-store" })
+        const data = await res.json().catch(() => null)
+
+        if (!res.ok || !data?.id) {
+          setLoading(false)
+          // Se falhar, ao menos mantém o pós-pago sem quebrar
+          setOrder({ id: String(orderId), amount: 0, quantity: 0 } as any)
+          return
+        }
+
+        setOrder(data)
         setLoading(false)
-        return
+      } catch {
+        setLoading(false)
       }
-
-      localStorage.setItem("lastPaidOrderId", orderId)
-
-      const res = await fetch(`/api/orders/${orderId}`, { cache: "no-store" })
-      const data = await res.json()
-
-      setOrder(data)
-      setLoading(false)
     }
 
     load()
-  }, [orderIdFromSearch])
+  }, [orderIdFromSearch, router])
+
+  // ✅ 2) Cadeado anti-voltar/anti-refresh (webview/histórico)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!order?.id) return
+
+    // arma 1x
+    if (!antiNavArmedRef.current) {
+      antiNavArmedRef.current = true
+      try {
+        window.history.pushState({ __paid_ok: true }, "", window.location.href)
+      } catch {}
+    }
+
+    const onPopState = () => {
+      // segura o usuário aqui (evita cair na home pelo back)
+      try {
+        window.history.pushState({ __paid_ok: true }, "", window.location.href)
+      } catch {}
+    }
+
+    // evita saída “sem querer” em alguns webviews
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+      return ""
+    }
+
+    window.addEventListener("popstate", onPopState)
+    window.addEventListener("beforeunload", onBeforeUnload)
+
+    return () => {
+      window.removeEventListener("popstate", onPopState)
+      window.removeEventListener("beforeunload", onBeforeUnload)
+    }
+  }, [order?.id])
 
   // ✅ Dispara Purchase no browser (fbq) com dedupe por event_id
   useEffect(() => {
@@ -170,10 +266,7 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     const lastFbEventId = (localStorage.getItem("lastFbEventId") || "").trim()
 
     const eventId = String(
-      (order.metaEventId && String(order.metaEventId).trim()) ||
-        cached ||
-        lastFbEventId ||
-        orderId,
+      (order.metaEventId && String(order.metaEventId).trim()) || cached || lastFbEventId || orderId,
     ).trim()
 
     try {
@@ -292,17 +385,19 @@ export default function PagamentoConfirmadoClient({ orderIdFromSearch }: Props) 
     const target = `/pagamento?${qs.toString()}`
 
     // ✅ Next router (normal)
+    let pushed = false
     try {
       router.push(target)
+      pushed = true
     } catch {}
 
-    // ✅ Fallback hard (webview/ios/bugs): se não navegou em 250ms, força por location
+    // ✅ Fallback hard (webview/ios/bugs): força por location
     if (typeof window !== "undefined") {
       setTimeout(() => {
         if (window.location.pathname.includes("/pagamento-confirmado")) {
           window.location.href = target
         }
-      }, 250)
+      }, pushed ? 180 : 50)
 
       // ✅ se ainda estiver aqui depois de 2.5s, destrava o botão (pra tentar de novo)
       setTimeout(() => {

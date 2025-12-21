@@ -1,12 +1,14 @@
 // app/pagamento-confirmado/page.tsx
 import PagamentoConfirmadoClient from "./PagamentoConfirmadoClient"
 
+export const dynamic = "force-dynamic"
+export const revalidate = 0
+
 type PageProps = {
-  searchParams: Promise<{ orderId?: string }>
+  searchParams?: { orderId?: string }
 }
 
-export default async function PagamentoConfirmadoPage({ searchParams }: PageProps) {
-  const sp = await searchParams
-  const orderId = sp?.orderId || undefined
+export default function PagamentoConfirmadoPage({ searchParams }: PageProps) {
+  const orderId = searchParams?.orderId || undefined
   return <PagamentoConfirmadoClient orderIdFromSearch={orderId} />
 }
