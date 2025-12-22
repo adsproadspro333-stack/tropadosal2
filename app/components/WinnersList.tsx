@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState, memo, useEffect } from "react"
 import { Box, Typography, Avatar, Button } from "@mui/material"
 import { Icon } from "@iconify/react"
 import Image from "next/image"
@@ -10,15 +10,41 @@ interface WinnersListProps {
   initialCount?: number
 }
 
-function InitialsFallback({ name }: { name: string }) {
-  const initials = (n: string) => {
-    return n
+function getAutoLiteMode(): boolean {
+  if (typeof window === "undefined") return false
+
+  try {
+    const nav = navigator as any
+    const dm = typeof nav.deviceMemory === "number" ? nav.deviceMemory : null
+    const hc =
+      typeof nav.hardwareConcurrency === "number" ? nav.hardwareConcurrency : null
+    const saveData =
+      typeof nav.connection?.saveData === "boolean" ? nav.connection.saveData : false
+    const reducedMotion =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")?.matches
+        : false
+
+    return Boolean(
+      (dm !== null && dm <= 3) ||
+        (hc !== null && hc <= 4) ||
+        saveData ||
+        reducedMotion,
+    )
+  } catch {
+    return false
+  }
+}
+
+const InitialsFallback = memo(function InitialsFallback({ name }: { name: string }) {
+  const initials = useMemo(() => {
+    return name
       .split(" ")
       .filter(Boolean)
       .slice(0, 2)
       .map((p) => p[0]?.toUpperCase() ?? "")
       .join("")
-  }
+  }, [name])
 
   return (
     <Avatar
@@ -35,24 +61,171 @@ function InitialsFallback({ name }: { name: string }) {
         boxShadow: "0 10px 22px rgba(0,0,0,0.35)",
       }}
     >
-      {initials(name)}
+      {initials}
     </Avatar>
   )
-}
+})
+
+const WinnerCard = memo(function WinnerCard({
+  w,
+  tokens,
+  isLite,
+}: {
+  w: any
+  tokens: {
+    GLASS: string
+    GLASS_SOFT: string
+    BORDER: string
+    TXT: string
+    MUTED: string
+    RED: string
+  }
+  isLite: boolean
+}) {
+  return (
+    <div
+      className="rounded-2xl p-4 flex items-center justify-between"
+      style={{
+        background: tokens.GLASS,
+        border: `1px solid ${tokens.BORDER}`,
+        // ✅ low-end: sombra menor e sem blur
+        boxShadow: isLite ? "0 10px 22px rgba(0,0,0,0.22)" : "0 16px 34px rgba(0,0,0,0.35)",
+        backdropFilter: isLite ? "none" : "blur(10px)",
+      }}
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        {/* AVATAR WRAPPER */}
+        <div
+          className="relative flex-shrink-0"
+          style={{
+            width: 48,
+            height: 48,
+          }}
+        >
+          {/* anel discreto */}
+          <div
+            style={{
+              position: "absolute",
+              inset: -2,
+              borderRadius: 999,
+              border: "1px solid rgba(255,255,255,0.14)",
+              boxShadow: isLite ? "0 6px 14px rgba(0,0,0,0.22)" : "0 10px 22px rgba(0,0,0,0.35)",
+              pointerEvents: "none",
+            }}
+          />
+
+          {w.avatarUrl ? (
+            <Image
+              src={w.avatarUrl || "/placeholder.svg"}
+              alt={`Foto de ${w.name}`}
+              fill
+              sizes="48px"
+              className="rounded-full object-cover"
+              // ✅ CRÍTICO: nada de priority em lista
+              priority={false}
+              loading="lazy"
+              style={{ borderRadius: 999 }}
+            />
+          ) : (
+            <div style={{ width: "100%", height: "100%" }}>
+              <InitialsFallback name={w.name} />
+            </div>
+          )}
+
+          {/* Badge */}
+          {w.avatarUrl && !isLite && (
+            <span
+              aria-label="Ganhador"
+              style={{
+                position: "absolute",
+                right: -4,
+                bottom: -4,
+                width: 18,
+                height: 18,
+                borderRadius: 999,
+                background: tokens.RED,
+                color: "#fff",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 11,
+                fontWeight: 900,
+                border: "2px solid rgba(11,15,25,0.95)",
+                boxShadow: "0 6px 14px rgba(0,0,0,0.35)",
+                pointerEvents: "none",
+              }}
+            >
+              ⭐
+            </span>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <p
+            className="font-extrabold truncate"
+            style={{ color: "#fff", letterSpacing: "-0.2px" }}
+          >
+            {w.name}
+          </p>
+          <p className="text-xs" style={{ color: tokens.MUTED }}>
+            {w.date}
+          </p>
+        </div>
+      </div>
+
+      <div className="ml-2 text-right">
+        <p
+          className="text-xs whitespace-nowrap"
+          style={{ color: tokens.TXT, fontWeight: 900 }}
+        >
+          {w.prize}
+        </p>
+
+        <div
+          style={{
+            marginTop: 6,
+            display: "inline-flex",
+            padding: "4px 10px",
+            borderRadius: 999,
+            background: tokens.GLASS_SOFT,
+            border: `1px solid ${tokens.BORDER}`,
+            color: "rgba(255,255,255,0.72)",
+            fontSize: 11,
+            fontWeight: 800,
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          Confirmado <span style={{ color: "#22C55E", fontWeight: 900 }}>✓</span>
+        </div>
+      </div>
+    </div>
+  )
+})
 
 export default function WinnersList({ initialCount = 5 }: WinnersListProps) {
   const [showAll, setShowAll] = useState(false)
-  const displayedWinners = showAll
-    ? mockWinners
-    : mockWinners.slice(0, initialCount)
+  const [isLite, setIsLite] = useState(false)
+
+  useEffect(() => {
+    setIsLite(getAutoLiteMode())
+  }, [])
+
+  const displayedWinners = useMemo(() => {
+    return showAll ? mockWinners : mockWinners.slice(0, initialCount)
+  }, [showAll, initialCount])
 
   // 🎨 tokens (DNA)
-  const GLASS = "rgba(255,255,255,0.06)"
-  const GLASS_SOFT = "rgba(255,255,255,0.04)"
-  const BORDER = "rgba(255,255,255,0.10)"
-  const TXT = "rgba(255,255,255,0.92)"
-  const MUTED = "rgba(255,255,255,0.70)"
-  const RED = "#DC2626"
+  const tokens = useMemo(() => {
+    const GLASS = isLite ? "rgba(17,24,39,0.92)" : "rgba(255,255,255,0.06)"
+    const GLASS_SOFT = isLite ? "rgba(17,24,39,0.72)" : "rgba(255,255,255,0.04)"
+    const BORDER = "rgba(255,255,255,0.10)"
+    const TXT = "rgba(255,255,255,0.92)"
+    const MUTED = "rgba(255,255,255,0.70)"
+    const RED = "#DC2626"
+
+    return { GLASS, GLASS_SOFT, BORDER, TXT, MUTED, RED }
+  }, [isLite])
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -73,124 +246,7 @@ export default function WinnersList({ initialCount = 5 }: WinnersListProps) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-3">
         {displayedWinners.map((w) => (
-          <div
-            key={w.id}
-            className="rounded-2xl p-4 flex items-center justify-between"
-            style={{
-              background: GLASS,
-              border: `1px solid ${BORDER}`,
-              boxShadow: "0 16px 34px rgba(0,0,0,0.35)",
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              {/* AVATAR WRAPPER */}
-              <div
-                className="relative flex-shrink-0"
-                style={{
-                  width: 48,
-                  height: 48,
-                }}
-              >
-                {/* “anel” discreto no avatar (sem poluir foto) */}
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: -2,
-                    borderRadius: 999,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    boxShadow: "0 10px 22px rgba(0,0,0,0.35)",
-                    pointerEvents: "none",
-                  }}
-                />
-
-                {w.avatarUrl ? (
-                  <Image
-                    src={w.avatarUrl || "/placeholder.svg"}
-                    alt={`Foto de ${w.name}`}
-                    fill
-                    sizes="48px"
-                    className="rounded-full object-cover"
-                    priority
-                    style={{
-                      borderRadius: 999,
-                    }}
-                  />
-                ) : (
-                  <div style={{ width: "100%", height: "100%" }}>
-                    <InitialsFallback name={w.name} />
-                  </div>
-                )}
-
-                {/* ✅ Badge pequeno (canto inferior direito) */}
-                {w.avatarUrl && (
-                  <span
-                    aria-label="Ganhador"
-                    style={{
-                      position: "absolute",
-                      right: -4,
-                      bottom: -4,
-                      width: 18,
-                      height: 18,
-                      borderRadius: 999,
-                      background: RED,
-                      color: "#fff",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 11,
-                      fontWeight: 900,
-                      border: "2px solid rgba(11,15,25,0.95)", // recorta no dark sem tampar foto
-                      boxShadow: "0 6px 14px rgba(0,0,0,0.35)", // sombra leve
-                      pointerEvents: "none",
-                    }}
-                  >
-                    ⭐
-                  </span>
-                )}
-              </div>
-
-              <div className="min-w-0">
-                <p
-                  className="font-extrabold truncate"
-                  style={{ color: "#fff", letterSpacing: "-0.2px" }}
-                >
-                  {w.name}
-                </p>
-                <p className="text-xs" style={{ color: MUTED }}>
-                  {w.date}
-                </p>
-              </div>
-            </div>
-
-            <div className="ml-2 text-right">
-              <p
-                className="text-xs whitespace-nowrap"
-                style={{ color: TXT, fontWeight: 900 }}
-              >
-                {w.prize}
-              </p>
-
-              <div
-                style={{
-                  marginTop: 6,
-                  display: "inline-flex",
-                  padding: "4px 10px",
-                  borderRadius: 999,
-                  background: GLASS_SOFT,
-                  border: `1px solid ${BORDER}`,
-                  color: "rgba(255,255,255,0.72)",
-                  fontSize: 11,
-                  fontWeight: 800,
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                Confirmado{" "}
-                <span style={{ color: "#22C55E", fontWeight: 900 }}>✓</span>
-              </div>
-            </div>
-          </div>
+          <WinnerCard key={w.id} w={w} tokens={tokens} isLite={isLite} />
         ))}
       </div>
 
@@ -199,16 +255,20 @@ export default function WinnersList({ initialCount = 5 }: WinnersListProps) {
           <Button
             variant="outlined"
             color="inherit"
-            onClick={() => setShowAll(!showAll)}
+            onClick={() => setShowAll((v) => !v)}
             endIcon={
-              <Icon
-                icon={showAll ? "mdi:chevron-up" : "mdi:chevron-down"}
-                width={20}
-              />
+              isLite ? (
+                <Typography sx={{ fontWeight: 900, lineHeight: 1 }}>
+                  {showAll ? "▲" : "▼"}
+                </Typography>
+              ) : (
+                <Icon
+                  icon={showAll ? "mdi:chevron-up" : "mdi:chevron-down"}
+                  width={20}
+                />
+              )
             }
-            aria-label={
-              showAll ? "Mostrar menos ganhadores" : "Mostrar mais ganhadores"
-            }
+            aria-label={showAll ? "Mostrar menos ganhadores" : "Mostrar mais ganhadores"}
             sx={{
               borderRadius: 999,
               fontWeight: 1000,

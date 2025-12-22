@@ -14,6 +14,7 @@ import {
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 import { useCartStore } from "@/store/cartStore"
+import { useShallow } from "zustand/react/shallow"
 import { formatBRL } from "@/lib/formatCurrency"
 import { useToast } from "./ui/Toast"
 
@@ -24,7 +25,15 @@ const INITIAL_MINUTES = 1
 const INITIAL_SECONDS = 0
 
 export default function OrderBumpCard() {
-  const { addOrderBump, bumpQty, bumpAmountInCents } = useCartStore()
+  // ✅ selector com cache (evita loop do getSnapshot)
+  const { addOrderBump, bumpQty, bumpAmountInCents } = useCartStore(
+    useShallow((s) => ({
+      addOrderBump: s.addOrderBump,
+      bumpQty: s.bumpQty,
+      bumpAmountInCents: s.bumpAmountInCents,
+    })),
+  )
+
   const { show } = useToast()
 
   const [applied, setApplied] = useState(false)
@@ -77,23 +86,21 @@ export default function OrderBumpCard() {
   const handleApply = () => {
     if (applied) return
 
-    // ✅ agora o bump SOMA números e valor em cima do que já existe
     addOrderBump(BUMP_QTY, BUMP_PRICE_CENTS)
     setApplied(true)
 
-    // 🎉 feedback visual rápido (leve e direto)
     setJustApplied(true)
     setTimeout(() => setJustApplied(false), 2600)
 
     show(
       `🚀 Oferta especial ativada! +${BUMP_QTY.toLocaleString(
         "pt-BR",
-      )} números adicionados <b>`,
+      )} números adicionados <b>(${formatBRL(BUMP_PRICE_CENTS / 100)})</b>`,
       "special-50-990",
     )
   }
 
-  // tokens visuais (mesmo universo do /pagamento)
+  // tokens visuais
   const GLASS = "rgba(255,255,255,0.06)"
   const BORDER = "rgba(255,255,255,0.10)"
   const TXT = "rgba(255,255,255,0.90)"
@@ -125,9 +132,6 @@ export default function OrderBumpCard() {
           : "0 14px 44px rgba(249,115,22,0.10)",
         position: "relative",
 
-        // =========================
-        // KEYFRAMES (leves)
-        // =========================
         "@keyframes bumpGlow": {
           "0%": { boxShadow: "0 0 0 0 rgba(249,115,22,0.18)" },
           "70%": { boxShadow: "0 0 0 14px rgba(249,115,22,0)" },
@@ -159,7 +163,6 @@ export default function OrderBumpCard() {
         animation: !applied ? "bumpGlow 1.9s ease-out infinite" : "none",
       }}
     >
-      {/* SHIMMER overlay (premium, bem sutil) */}
       {!applied && (
         <Box
           aria-hidden
@@ -187,7 +190,6 @@ export default function OrderBumpCard() {
         </Box>
       )}
 
-      {/* mini “celebração” leve quando aplica */}
       {justApplied && (
         <Box
           aria-hidden
@@ -202,7 +204,6 @@ export default function OrderBumpCard() {
         />
       )}
 
-      {/* HEADER (glass + laranja bem controlado) */}
       <Box
         sx={{
           px: 2,
@@ -286,7 +287,6 @@ export default function OrderBumpCard() {
         />
       </Box>
 
-      {/* Barra de urgência (real / visual) */}
       {!applied && (
         <Box sx={{ px: 2, pb: 1.0, position: "relative", zIndex: 1 }}>
           <LinearProgress
@@ -308,9 +308,7 @@ export default function OrderBumpCard() {
 
       <Divider sx={{ borderColor: BORDER }} />
 
-      {/* CORPO */}
       <Box sx={{ px: 2, pt: 1.6, pb: 1.8, position: "relative", zIndex: 1 }}>
-        {/* Applied banner */}
         <Collapse in={applied} timeout={220}>
           <Box
             sx={{
@@ -333,7 +331,6 @@ export default function OrderBumpCard() {
           </Box>
         </Collapse>
 
-        {/* título + preço */}
         <Box sx={{ textAlign: "center", mb: 1.25 }}>
           <Typography sx={{ fontWeight: 1000, color: "#fff", fontSize: "0.95rem" }}>
             Adicione <span style={{ color: "#FDBA74" }}>+{BUMP_QTY} números</span> agora
@@ -377,19 +374,11 @@ export default function OrderBumpCard() {
             />
           </Box>
 
-          <Typography
-            sx={{
-              display: "block",
-              mt: 0.7,
-              color: MUTED,
-              fontSize: "0.78rem",
-            }}
-          >
+          <Typography sx={{ display: "block", mt: 0.7, color: MUTED, fontSize: "0.78rem" }}>
             Oferta válida só nesta etapa. Depois some.
           </Typography>
         </Box>
 
-        {/* benefícios (glass cards) */}
         <Box
           sx={{
             display: "grid",
@@ -415,7 +404,6 @@ export default function OrderBumpCard() {
                 bgcolor: "rgba(255,255,255,0.05)",
                 border: `1px solid ${BORDER}`,
                 transition: "transform 140ms ease, border-color 140ms ease",
-                transform: !applied && timeLeft > 0 ? "translateY(0)" : "translateY(0)",
                 "&:active": { transform: "scale(0.99)" },
               }}
             >
@@ -427,73 +415,6 @@ export default function OrderBumpCard() {
           ))}
         </Box>
 
-        {/* urgência compacta */}
-        {!applied && (
-          <Box
-            sx={{
-              mb: 1.25,
-              borderRadius: 2,
-              border: isEnding
-                ? "1px dashed rgba(239,68,68,0.55)"
-                : "1px dashed rgba(249,115,22,0.35)",
-              bgcolor: isEnding ? "rgba(239,68,68,0.10)" : "rgba(249,115,22,0.08)",
-              px: 1.2,
-              py: 0.9,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 1.2,
-            }}
-          >
-            <Stack direction="row" spacing={0.8} alignItems="center" sx={{ minWidth: 0 }}>
-              <Box
-                sx={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: "999px",
-                  bgcolor: isEnding ? "rgba(239,68,68,0.16)" : "rgba(249,115,22,0.16)",
-                  border: isEnding
-                    ? "1px solid rgba(239,68,68,0.25)"
-                    : "1px solid rgba(249,115,22,0.22)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  flexShrink: 0,
-                }}
-              >
-                <Icon icon="mdi:clock-outline" width={16} color={isEnding ? "#FCA5A5" : "#FDBA74"} />
-              </Box>
-
-              <Typography
-                sx={{
-                  fontSize: "0.78rem",
-                  color: isEnding ? "#FCA5A5" : "#FDBA74",
-                  fontWeight: 950,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                Expira em instantes
-              </Typography>
-            </Stack>
-
-            <Chip
-              label={formattedTime}
-              size="small"
-              sx={{
-                bgcolor: isEnding ? "rgba(239,68,68,0.92)" : "rgba(239,68,68,0.85)",
-                color: "#fff",
-                fontWeight: 1000,
-                borderRadius: 999,
-                letterSpacing: 0.3,
-                animation: isEnding ? "blink 0.75s infinite" : "none",
-              }}
-            />
-          </Box>
-        )}
-
-        {/* CTA */}
         <Button
           fullWidth
           onClick={handleApply}
@@ -509,11 +430,7 @@ export default function OrderBumpCard() {
             borderColor: applied ? BORDER : "#F97316",
             color: applied ? "rgba(255,255,255,0.88)" : "#0B0F19",
             transition: "transform 120ms ease, filter 120ms ease, background-color 120ms ease",
-
-            // pulse só quando faz sentido (não aplicado e ainda com tempo)
-            animation:
-              !applied && timeLeft > 0 ? "pulseCTA 1.7s ease-in-out infinite" : "none",
-
+            animation: !applied && timeLeft > 0 ? "pulseCTA 1.7s ease-in-out infinite" : "none",
             "&:hover": {
               bgcolor: applied ? "rgba(255,255,255,0.08)" : "#FB923C",
               filter: applied ? "none" : "brightness(1.02)",
@@ -543,7 +460,6 @@ export default function OrderBumpCard() {
               : `Adicionar +${BUMP_QTY} números por ${formatBRL(BUMP_PRICE_CENTS / 100)}`}
         </Button>
 
-        {/* rodapé micro */}
         <Typography
           sx={{
             display: "block",

@@ -17,6 +17,7 @@ import {
 } from "@mui/material"
 import { Icon } from "@iconify/react"
 import { useCartStore } from "@/store/cartStore"
+import { useShallow } from "zustand/react/shallow"
 import { formatBRL } from "@/lib/formatCurrency"
 import OrderBumpCard from "../components/OrderBumpCard"
 
@@ -40,9 +41,17 @@ export default function ConfirmacaoPage() {
   const router = useRouter()
   const [customer, setCustomer] = useState<CustomerData | null>(null)
 
-  // pega do carrinho a quantidade e o total em centavos
+  // ✅ pega do carrinho SOMENTE o que a página usa (e com cache/shallow)
   const { qty, totalInCents, bumpQty, bumpAmountInCents, addOrderBump } =
-    useCartStore()
+    useCartStore(
+      useShallow((s) => ({
+        qty: s.qty,
+        totalInCents: s.totalInCents,
+        bumpQty: s.bumpQty,
+        bumpAmountInCents: s.bumpAmountInCents,
+        addOrderBump: s.addOrderBump,
+      })),
+    )
 
   const [detailsOpen, setDetailsOpen] = useState(false)
 
@@ -367,7 +376,9 @@ export default function ConfirmacaoPage() {
               </Box>
 
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography sx={{ fontWeight: 1000, color: "#fff", lineHeight: 1.1 }}>
+                <Typography
+                  sx={{ fontWeight: 1000, color: "#fff", lineHeight: 1.1 }}
+                >
                   PIX
                 </Typography>
                 <Typography sx={{ color: MUTED, fontSize: "0.78rem" }}>
@@ -398,8 +409,14 @@ export default function ConfirmacaoPage() {
                 border: "1px solid rgba(255,255,255,0.10)",
               }}
             >
-              <Stack direction="row" alignItems="baseline" justifyContent="space-between">
-                <Typography sx={{ color: "rgba(255,255,255,0.88)", fontWeight: 900 }}>
+              <Stack
+                direction="row"
+                alignItems="baseline"
+                justifyContent="space-between"
+              >
+                <Typography
+                  sx={{ color: "rgba(255,255,255,0.88)", fontWeight: 900 }}
+                >
                   {qty} números
                 </Typography>
 
@@ -471,13 +488,19 @@ export default function ConfirmacaoPage() {
                         </Typography>
                       </Stack>
 
-                      <Typography sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}>
+                      <Typography
+                        sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}
+                      >
                         <strong>CPF:</strong> {maskCPF(customer.cpf)}
                       </Typography>
-                      <Typography sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}>
+                      <Typography
+                        sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}
+                      >
                         <strong>Email:</strong> {customer.email}
                       </Typography>
-                      <Typography sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}>
+                      <Typography
+                        sx={{ color: "rgba(255,255,255,0.82)", fontSize: "0.9rem" }}
+                      >
                         <strong>Celular:</strong> {customer.phone}
                       </Typography>
 
@@ -559,7 +582,14 @@ export default function ConfirmacaoPage() {
                   <Icon icon="mdi:alert-circle-outline" width={16} color="#FDBA74" />
                 </Box>
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ color: "#fff", fontWeight: 1000, fontSize: "0.86rem", lineHeight: 1.15 }}>
+                  <Typography
+                    sx={{
+                      color: "#fff",
+                      fontWeight: 1000,
+                      fontSize: "0.86rem",
+                      lineHeight: 1.15,
+                    }}
+                  >
                     Última chance antes do PIX
                   </Typography>
                   <Typography sx={{ color: "rgba(255,255,255,0.72)", fontSize: "0.78rem", mt: 0.1 }}>
@@ -612,11 +642,11 @@ export default function ConfirmacaoPage() {
           </Stack>
         </Box>
 
-        {/* spacer extra (garantia anti-tampa em alguns Androids) */}
+        {/* spacer extra */}
         <Box sx={{ height: 10 }} />
       </Container>
 
-      {/* STICKY MINI BUMP (aparece quando o OrderBump sai da tela) */}
+      {/* STICKY MINI BUMP */}
       <Collapse in={stickyBumpOpen && !isBumpApplied} timeout={200}>
         <Box
           sx={{
@@ -716,7 +746,7 @@ export default function ConfirmacaoPage() {
         </Box>
       </Collapse>
 
-      {/* CTA FIXO (mesmo padrão do /pagamento) */}
+      {/* CTA FIXO */}
       <Box
         sx={{
           position: "fixed",

@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useMemo, useState } from "react"
 import { Box, Typography, Paper } from "@mui/material"
 import AccessTimeIcon from "@mui/icons-material/AccessTime"
 import WhatshotIcon from "@mui/icons-material/Whatshot"
@@ -9,68 +10,114 @@ interface SalesProgressProps {
   percent: number
 }
 
+function getAutoLiteMode(): boolean {
+  if (typeof window === "undefined") return false
+
+  try {
+    const nav = navigator as any
+    const dm = typeof nav.deviceMemory === "number" ? nav.deviceMemory : null
+    const hc =
+      typeof nav.hardwareConcurrency === "number" ? nav.hardwareConcurrency : null
+    const saveData =
+      typeof nav.connection?.saveData === "boolean" ? nav.connection.saveData : false
+    const reducedMotion =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")?.matches
+        : false
+
+    return Boolean(
+      (dm !== null && dm <= 3) ||
+        (hc !== null && hc <= 4) ||
+        saveData ||
+        reducedMotion,
+    )
+  } catch {
+    return false
+  }
+}
+
 export default function SalesProgress({ percent }: SalesProgressProps) {
   const safePercent = Math.max(0, Math.min(100, Number(percent) || 0))
 
-  let statusLabel = ""
-  let helperText = ""
-  let Icon = AccessTimeIcon
-  let barColor = "#22C55E" // green
+  const [isLite, setIsLite] = useState(false)
+  useEffect(() => {
+    setIsLite(getAutoLiteMode())
+  }, [])
 
-  if (safePercent < 40) {
-    statusLabel = "Edição liberada"
-    helperText = "Começou agora — pega antes de subir."
-    Icon = AccessTimeIcon
-    barColor = "#22C55E"
-  } else if (safePercent < 80) {
-    statusLabel = "Alta procura"
-    helperText = "Tá girando forte — muita gente garantindo hoje."
-    Icon = WhatshotIcon
-    barColor = "#FB923C"
-  } else {
-    statusLabel = "Reta final"
-    helperText = "Últimos números — essa parte some rápido."
-    Icon = CheckCircleIcon
-    barColor = "#DC2626"
-  }
+  const ui = useMemo(() => {
+    let statusLabel = ""
+    let helperText = ""
+    let Icon = AccessTimeIcon
+    let barColor = "#22C55E" // green
+
+    if (safePercent < 40) {
+      statusLabel = "Edição liberada"
+      helperText = "Começou agora — pega antes de subir."
+      Icon = AccessTimeIcon
+      barColor = "#22C55E"
+    } else if (safePercent < 80) {
+      statusLabel = "Alta procura"
+      helperText = "Tá girando forte — muita gente garantindo hoje."
+      Icon = WhatshotIcon
+      barColor = "#FB923C"
+    } else {
+      statusLabel = "Reta final"
+      helperText = "Últimos números — essa parte some rápido."
+      Icon = CheckCircleIcon
+      barColor = "#DC2626"
+    }
+
+    const glow =
+      safePercent < 40
+        ? "rgba(34,197,94,0.18)"
+        : safePercent < 80
+          ? "rgba(251,146,60,0.18)"
+          : "rgba(220,38,38,0.20)"
+
+    const iconBg =
+      safePercent < 40
+        ? "rgba(34,197,94,0.14)"
+        : safePercent < 80
+          ? "rgba(251,146,60,0.14)"
+          : "rgba(220,38,38,0.14)"
+
+    const badgeBg =
+      safePercent < 40
+        ? "rgba(34,197,94,0.12)"
+        : safePercent < 80
+          ? "rgba(251,146,60,0.12)"
+          : "rgba(220,38,38,0.14)"
+
+    const badgeBorder =
+      safePercent < 40
+        ? "rgba(34,197,94,0.22)"
+        : safePercent < 80
+          ? "rgba(251,146,60,0.22)"
+          : "rgba(220,38,38,0.26)"
+
+    return {
+      statusLabel,
+      helperText,
+      Icon,
+      barColor,
+      glow,
+      iconBg,
+      badgeBg,
+      badgeBorder,
+    }
+  }, [safePercent])
 
   // DNA dark/glass
-  const GLASS = "rgba(255,255,255,0.06)"
+  const GLASS = isLite ? "rgba(17,24,39,0.92)" : "rgba(255,255,255,0.06)"
   const BORDER = "rgba(255,255,255,0.10)"
   const TXT = "rgba(255,255,255,0.92)"
   const MUTED = "rgba(255,255,255,0.68)"
-  const SOFT = "rgba(255,255,255,0.04)"
+  const SOFT = isLite ? "rgba(17,24,39,0.72)" : "rgba(255,255,255,0.04)"
   const trackBg = "rgba(255,255,255,0.10)"
 
-  const glow =
-    safePercent < 40
-      ? "rgba(34,197,94,0.18)"
-      : safePercent < 80
-        ? "rgba(251,146,60,0.18)"
-        : "rgba(220,38,38,0.20)"
-
-  const iconBg =
-    safePercent < 40
-      ? "rgba(34,197,94,0.14)"
-      : safePercent < 80
-        ? "rgba(251,146,60,0.14)"
-        : "rgba(220,38,38,0.14)"
-
-  const badgeBg =
-    safePercent < 40
-      ? "rgba(34,197,94,0.12)"
-      : safePercent < 80
-        ? "rgba(251,146,60,0.12)"
-        : "rgba(220,38,38,0.14)"
-
-  const badgeBorder =
-    safePercent < 40
-      ? "rgba(34,197,94,0.22)"
-      : safePercent < 80
-        ? "rgba(251,146,60,0.22)"
-        : "rgba(220,38,38,0.26)"
-
-  const pulseDanger = safePercent >= 80
+  // ⚠️ Em low-end, desativa animações infinitas e efeitos caros
+  const enableAnimations = !isLite
+  const pulseDanger = enableAnimations && safePercent >= 80
 
   return (
     <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
@@ -82,20 +129,28 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
           borderRadius: 3,
           bgcolor: GLASS,
           border: `1px solid ${BORDER}`,
-          backdropFilter: "blur(10px)",
+          backdropFilter: isLite ? "none" : "blur(10px)",
           p: 1.6,
           mb: 2,
-          boxShadow:
-            "0 18px 42px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.20)",
+          boxShadow: isLite
+            ? "0 12px 26px rgba(0,0,0,0.26)"
+            : "0 18px 42px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.20)",
           position: "relative",
           overflow: "hidden",
-          "&::before": {
-            content: '""',
-            position: "absolute",
-            inset: -1,
-            background: `radial-gradient(760px 260px at 18% 0%, ${glow}, transparent 58%)`,
-            pointerEvents: "none",
-          },
+
+          // ✅ Radial glow só em premium
+          ...(isLite
+            ? {}
+            : {
+                "&::before": {
+                  content: '""',
+                  position: "absolute",
+                  inset: -1,
+                  background: `radial-gradient(760px 260px at 18% 0%, ${ui.glow}, transparent 58%)`,
+                  pointerEvents: "none",
+                },
+              }),
+
           ...(pulseDanger
             ? {
                 animation: "pulseCard 1.8s ease-in-out infinite",
@@ -115,15 +170,15 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
                 width: 34,
                 height: 34,
                 borderRadius: "50%",
-                bgcolor: iconBg,
+                bgcolor: ui.iconBg,
                 border: `1px solid ${BORDER}`,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                boxShadow: "0 10px 22px rgba(0,0,0,0.25)",
+                boxShadow: isLite ? "0 6px 14px rgba(0,0,0,0.22)" : "0 10px 22px rgba(0,0,0,0.25)",
               }}
             >
-              <Icon sx={{ fontSize: 18, color: barColor }} />
+              <ui.Icon sx={{ fontSize: 18, color: ui.barColor }} />
             </Box>
 
             <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -155,12 +210,12 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
                     fontSize: "0.70rem",
                     fontWeight: 1000,
                     color: TXT,
-                    bgcolor: badgeBg,
-                    border: `1px solid ${badgeBorder}`,
+                    bgcolor: ui.badgeBg,
+                    border: `1px solid ${ui.badgeBorder}`,
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {statusLabel}
+                  {ui.statusLabel}
                 </Box>
               </Box>
 
@@ -172,17 +227,13 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
                   mt: 0.35,
                 }}
               >
-                <strong style={{ color: "#fff" }}>
-                  {safePercent.toFixed(1)}%
-                </strong>{" "}
-                <span style={{ color: MUTED }}>
-                  dos números já foram garantidos
-                </span>
+                <strong style={{ color: "#fff" }}>{safePercent.toFixed(1)}%</strong>{" "}
+                <span style={{ color: MUTED }}>dos números já foram garantidos</span>
               </Typography>
             </Box>
           </Box>
 
-          {/* barra REAL (custom) */}
+          {/* barra */}
           <Box mt={1.2}>
             <Box
               sx={{
@@ -199,52 +250,63 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
                   width: `${safePercent}%`,
                   height: "100%",
                   borderRadius: 999,
-                  background: `linear-gradient(90deg, ${barColor}, rgba(255,255,255,0.25), ${barColor})`,
-                  backgroundSize: "220% 100%",
-                  boxShadow:
-                    safePercent < 40
+
+                  // ✅ premium: gradiente animado / low-end: cor sólida (bem mais leve)
+                  background: enableAnimations
+                    ? `linear-gradient(90deg, ${ui.barColor}, rgba(255,255,255,0.25), ${ui.barColor})`
+                    : ui.barColor,
+                  backgroundSize: enableAnimations ? "220% 100%" : "auto",
+
+                  boxShadow: isLite
+                    ? "none"
+                    : safePercent < 40
                       ? "0 10px 26px rgba(34,197,94,0.22)"
                       : safePercent < 80
                         ? "0 10px 26px rgba(251,146,60,0.22)"
                         : "0 10px 26px rgba(220,38,38,0.25)",
+
                   transition: "width 700ms ease",
-                  animation: "flow 2.1s ease-in-out infinite",
                   position: "relative",
                   overflow: "hidden",
-                  "@keyframes flow": {
-                    "0%": { backgroundPosition: "0% 50%" },
-                    "100%": { backgroundPosition: "100% 50%" },
-                  },
 
-                  // shine passando por cima
-                  "&::after": {
-                    content: '""',
-                    position: "absolute",
-                    inset: 0,
-                    background:
-                      "linear-gradient(90deg, transparent, rgba(255,255,255,0.30), transparent)",
-                    transform: "translateX(-60%)",
-                    animation: "shine 2.4s ease-in-out infinite",
-                  },
-                  "@keyframes shine": {
-                    "0%": { transform: "translateX(-80%)" },
-                    "100%": { transform: "translateX(140%)" },
-                  },
+                  // ✅ animações infinitas só em premium
+                  ...(enableAnimations
+                    ? {
+                        animation: "flow 2.1s ease-in-out infinite",
+                        "@keyframes flow": {
+                          "0%": { backgroundPosition: "0% 50%" },
+                          "100%": { backgroundPosition: "100% 50%" },
+                        },
 
-                  // stripes “carregando”
-                  "&::before": {
-                    content: '""',
-                    position: "absolute",
-                    inset: 0,
-                    opacity: 0.18,
-                    background:
-                      "repeating-linear-gradient(45deg, rgba(255,255,255,0.35) 0 10px, rgba(255,255,255,0.0) 10px 20px)",
-                    animation: "stripes 1.6s linear infinite",
-                  },
-                  "@keyframes stripes": {
-                    "0%": { backgroundPosition: "0 0" },
-                    "100%": { backgroundPosition: "40px 0" },
-                  },
+                        "&::after": {
+                          content: '""',
+                          position: "absolute",
+                          inset: 0,
+                          background:
+                            "linear-gradient(90deg, transparent, rgba(255,255,255,0.30), transparent)",
+                          transform: "translateX(-60%)",
+                          animation: "shine 2.4s ease-in-out infinite",
+                        },
+                        "@keyframes shine": {
+                          "0%": { transform: "translateX(-80%)" },
+                          "100%": { transform: "translateX(140%)" },
+                        },
+
+                        "&::before": {
+                          content: '""',
+                          position: "absolute",
+                          inset: 0,
+                          opacity: 0.18,
+                          background:
+                            "repeating-linear-gradient(45deg, rgba(255,255,255,0.35) 0 10px, rgba(255,255,255,0.0) 10px 20px)",
+                          animation: "stripes 1.6s linear infinite",
+                        },
+                        "@keyframes stripes": {
+                          "0%": { backgroundPosition: "0 0" },
+                          "100%": { backgroundPosition: "40px 0" },
+                        },
+                      }
+                    : {}),
                 }}
               />
             </Box>
@@ -265,7 +327,7 @@ export default function SalesProgress({ percent }: SalesProgressProps) {
                   lineHeight: 1.35,
                 }}
               >
-                {helperText}
+                {ui.helperText}
               </Typography>
             </Box>
           </Box>
