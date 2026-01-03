@@ -225,7 +225,7 @@ export default function HeroBanner() {
                 mt: 0.2,
               }}
             >
-              01/01/2026 21:00
+              05/01/2026 21:00
             </Typography>
           </Box>
         </Box>
